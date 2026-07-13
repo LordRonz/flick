@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "flick",
+  "main": "src/server.ts",
+  "compatibility_date": "2026-07-13",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "durable_objects": {
+    "bindings": [{ "name": "FLICK_ROOM", "class_name": "FlickRoom" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["FlickRoom"] }]
+}
