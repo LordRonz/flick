@@ -2,13 +2,24 @@ import { describe, expect, it } from "vitest";
 import { mapAimAngle, mapThrowSpeed, smoothAim } from "./aim";
 
 describe("arena aiming", () => {
-	it("maps normalized tilt across a station arc", () => {
+	it("maps normalized aim across a station arc", () => {
 		expect(
 			mapAimAngle(-1, { minAngle: -1, maxAngle: 1, defaultAngle: 0 }),
 		).toBe(-1);
 		expect(mapAimAngle(1, { minAngle: -1, maxAngle: 1, defaultAngle: 0 })).toBe(
 			1,
 		);
+	});
+
+	it("mirrors input for stations facing the opposite direction", () => {
+		expect(
+			mapAimAngle(1, {
+				minAngle: -3,
+				maxAngle: -2,
+				defaultAngle: -2.5,
+				invertInput: true,
+			}),
+		).toBe(-3);
 	});
 
 	it("smooths noisy aim input", () => {

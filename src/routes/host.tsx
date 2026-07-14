@@ -93,9 +93,9 @@ function HostPage() {
 							ready: player.ready,
 						});
 						bridgeRef.current.send({
-							type: "player-calibration",
+							type: "player-motion-status",
 							playerId: player.playerId,
-							calibrated: player.calibrated,
+							enabled: player.motionEnabled,
 						});
 					} else {
 						bridgeRef.current.send({
@@ -119,30 +119,31 @@ function HostPage() {
 						playerId: message.playerId,
 						ready: input.ready,
 					});
-				} else if (input.type === "calibration-status") {
+				} else if (input.type === "motion-status") {
 					setPlayers((current) =>
 						current.map((player) =>
 							player.playerId === message.playerId
-								? { ...player, calibrated: input.calibrated }
+								? { ...player, motionEnabled: input.enabled }
 								: player,
 						),
 					);
 					bridgeRef.current.send({
-						type: "player-calibration",
+						type: "player-motion-status",
 						playerId: message.playerId,
-						calibrated: input.calibrated,
+						enabled: input.enabled,
 					});
-				} else if (input.type === "orientation") {
+				} else if (input.type === "aim") {
 					bridgeRef.current.send({
-						type: "orientation",
+						type: "aim",
 						playerId: message.playerId,
-						normalizedX: input.normalizedX,
+						normalizedAim: input.normalizedAim,
 					});
 				} else if (input.type === "flick") {
 					bridgeRef.current.send({
 						type: "flick",
 						playerId: message.playerId,
 						intensity: input.intensity,
+						source: input.source,
 					});
 				}
 			}
@@ -178,7 +179,12 @@ function HostPage() {
 					...current,
 					"ready" in player
 						? player
-						: { ...player, ready: false, calibrated: false, connected: true },
+						: {
+								...player,
+								ready: false,
+								motionEnabled: false,
+								connected: true,
+							},
 				].sort((a, b) => a.playerNumber - b.playerNumber);
 			return current.map((candidate) =>
 				candidate.playerId === player.playerId
@@ -216,6 +222,7 @@ function HostPage() {
 			playerId:
 				players.find((player) => player.connected)?.playerId ?? "keyboard-p1",
 			intensity: 0.8,
+			source: "button",
 		});
 	}
 
@@ -361,7 +368,7 @@ function HostPage() {
 					<p className="rail-hint">
 						{isDevelopment
 							? "Dev mode: keyboard fallback and one-player demo are enabled."
-							: "Players must enable motion, calibrate, and mark ready before the round can start."}
+							: "Drag to aim, then mark ready. Physical flick is optional."}
 					</p>
 				</aside>
 			</section>
@@ -404,6 +411,14 @@ function handleGameEvent(
 			type: "flick-accepted",
 			playerId: event.playerId,
 			projectileType: event.projectileType,
+			practice: false,
+		});
+	} else if (event.type === "practice-throw" && isUuid(event.playerId)) {
+		sendSocketMessage(socketRef.current, {
+			type: "flick-accepted",
+			playerId: event.playerId,
+			projectileType: event.projectileType,
+			practice: true,
 		});
 	} else if (
 		event.type === "player-hit" &&
@@ -462,9 +477,9 @@ function LobbyRow({ player, score }: { player: LobbyPlayer; score: number }) {
 				<strong>{player.color.toUpperCase()} PLAYER</strong>
 				<small>
 					{player.connected
-						? player.calibrated
-							? "CALIBRATED"
-							: "CONNECTED"
+						? player.motionEnabled
+							? "PHYSICAL FLICK"
+							: "BUTTON THROW"
 						: "RECONNECTING"}
 				</small>
 			</div>

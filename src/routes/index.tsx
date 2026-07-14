@@ -29,8 +29,8 @@ function Home() {
       <section className="landing-copy">
         <div className="brand-mark"><span className="brand-dot" />FLICK</div>
         <p className="eyebrow">PHONE AS CONTROLLER</p>
-        <h1>Flick a shot.<br /><em>Find the target.</em></h1>
-        <p className="lede">Tilt and flick your iPhone to control a tiny physics game running on your laptop.</p>
+        <h1>Drag the aim.<br /><em>Flick the shot.</em></h1>
+        <p className="lede">Drag on your phone to aim, then flick or tap Throw to fire at the office arena on your laptop.</p>
         <button className="primary-button" type="button" onClick={createGame} disabled={isCreating}>
           {isCreating ? 'Creating room…' : 'Create Game'}
           <span aria-hidden="true">↗</span>
@@ -48,7 +48,7 @@ function Home() {
           <div className="preview-grid" />
         </div>
         <div className="preview-stats">
-          <div><span>MOVE</span><strong>TILT</strong></div>
+          <div><span>AIM</span><strong>DRAG</strong></div>
           <div><span>THROW</span><strong>FLICK</strong></div>
           <div><span>GOAL</span><strong>HIT TARGET</strong></div>
         </div>

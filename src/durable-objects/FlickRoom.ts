@@ -5,11 +5,13 @@ import type {
 	PlayerAssignment,
 	PlayerNumber,
 } from "../game/types";
+import { isFreshInputTimestamp } from "../realtime/input-validation";
 import {
 	colorForPlayerNumber,
 	findFirstFreePlayerNumber,
 } from "../realtime/player-slots";
 import {
+	type ControllerMessage,
 	ControllerMessageSchema,
 	type HostToRoomMessage,
 	HostToRoomMessageSchema,
@@ -32,12 +34,13 @@ type ConnectionAttachment = {
 type StoredPlayerSession = {
 	player: PlayerAssignment;
 	ready: boolean;
-	calibrated: boolean;
+	motionEnabled: boolean;
 	disconnectedAt?: number;
 };
 
 export class FlickRoom extends DurableObject {
 	private readonly state: DurableObjectState;
+	private readonly lastControllerTimestamps = new Map<string, number>();
 
 	constructor(ctx: DurableObjectState, _env: FlickEnv) {
 		super(ctx, _env);
@@ -121,6 +124,13 @@ export class FlickRoom extends DurableObject {
 				this.send(socket, {
 					type: "error",
 					message: "Invalid controller message.",
+				});
+				return;
+			}
+			if (!this.acceptFreshInput(attachment.sessionId, parsed)) {
+				this.send(socket, {
+					type: "error",
+					message: "Stale controller input.",
 				});
 				return;
 			}
@@ -227,24 +237,20 @@ export class FlickRoom extends DurableObject {
 		return {
 			player,
 			ready: false,
-			calibrated: false,
+			motionEnabled: false,
 		} satisfies StoredPlayerSession;
 	}
 
 	private async persistControllerState(
 		sessionId: string,
-		input: { type: string; ready?: boolean; calibrated?: boolean },
+		input: ControllerMessage,
 	) {
 		const key = this.sessionKey(sessionId);
 		const current = await this.state.storage.get<StoredPlayerSession>(key);
 		if (!current) return;
 		if (input.type === "ready" && typeof input.ready === "boolean")
 			current.ready = input.ready;
-		if (
-			input.type === "calibration-status" &&
-			typeof input.calibrated === "boolean"
-		)
-			current.calibrated = input.calibrated;
+		if (input.type === "motion-status") current.motionEnabled = input.enabled;
 		await this.state.storage.put(key, current);
 		await this.sendLobbyState(this.socketFor("host"));
 		await this.sendLobbyState(this.socketFor("controller", sessionId));
@@ -288,7 +294,7 @@ export class FlickRoom extends DurableObject {
 			players.push({
 				...record.player,
 				ready: record.ready,
-				calibrated: record.calibrated,
+				motionEnabled: record.motionEnabled ?? false,
 				connected: connected.has(record.player.playerId),
 			});
 		}
@@ -323,6 +329,15 @@ export class FlickRoom extends DurableObject {
 
 	private sessionKey(sessionId: string) {
 		return `player-session:${sessionId}`;
+	}
+
+	private acceptFreshInput(sessionId: string, input: ControllerMessage) {
+		if (input.type !== "aim" && input.type !== "flick") return true;
+		const now = Date.now();
+		const previous = this.lastControllerTimestamps.get(sessionId);
+		if (!isFreshInputTimestamp(input.timestamp, now, previous)) return false;
+		this.lastControllerTimestamps.set(sessionId, input.timestamp);
+		return true;
 	}
 
 	private controllerSockets() {

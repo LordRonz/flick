@@ -7,6 +7,7 @@ import {
 	PLATFORM_LAYOUT,
 	STATIONS,
 } from "../config/arena";
+import { type FlickSource, THROW_COOLDOWN_MS } from "../config/controls";
 import {
 	MAX_ACTIVE_PROJECTILES,
 	nextProjectileType,
@@ -67,11 +68,13 @@ type PlayerState = {
 	aimGraphic: Phaser.GameObjects.Graphics;
 	label: Phaser.GameObjects.Text;
 	projectileLabel: Phaser.GameObjects.Text;
-	normalizedX: number;
+	normalizedAim: number;
+	aimActiveUntil: number;
 	angle: number;
 	cooldownUntil: number;
 	throwCount: number;
 	nextType: ProjectileType;
+	currentType: ProjectileType;
 	ready: boolean;
 	stats: PlayerRoundStats;
 };
@@ -139,7 +142,7 @@ export class ArenaScene extends Phaser.Scene {
 			player.angle = smoothAim(
 				player.angle,
 				mapAimAngle(
-					player.normalizedX,
+					player.normalizedAim,
 					STATIONS[player.assignment.playerNumber].aim,
 				),
 			);
@@ -147,8 +150,8 @@ export class ArenaScene extends Phaser.Scene {
 			const cooldown = Math.max(0, player.cooldownUntil - now);
 			player.projectileLabel.setText(
 				cooldown > 0
-					? `COOLDOWN ${(cooldown / 1000).toFixed(1)}s`
-					: `NEXT ${projectileName(player.nextType)}`,
+					? `${projectileName(player.currentType)} • COOLDOWN ${(cooldown / 1000).toFixed(1)}s`
+					: `${projectileName(player.currentType)} • NEXT ${projectileName(player.nextType)}`,
 			);
 			player.projectileLabel.setColor(cooldown > 0 ? "#8ea2a5" : "#edf7f5");
 		}
@@ -330,20 +333,39 @@ export class ArenaScene extends Phaser.Scene {
 					command.ready ? "READY" : "NOT READY",
 				);
 				break;
-			case "player-calibration":
+			case "player-motion-status":
 				this.setPlayerLabel(
 					command.playerId,
-					command.calibrated ? "CALIBRATED" : "CALIBRATE",
+					command.enabled ? "PHYSICAL FLICK" : "BUTTON THROW",
 				);
 				break;
-			case "orientation": {
+			case "aim": {
 				const player = this.players.get(command.playerId);
-				if (player) player.normalizedX = clamp(command.normalizedX, -1, 1);
+				if (player) {
+					player.normalizedAim = clamp(command.normalizedAim, -1, 1);
+					player.aimActiveUntil = this.time.now + 280;
+				}
 				break;
 			}
-			case "flick":
-				this.launchForPlayer(command.playerId, command.intensity);
+			case "flick": {
+				if (this.phase === "lobby") {
+					const player = this.players.get(command.playerId);
+					if (player)
+						this.bridge.emit({
+							type: "practice-throw",
+							playerId: command.playerId,
+							projectileType: player.nextType,
+							source: command.source,
+						});
+				} else if (this.phase === "playing") {
+					this.launchForPlayer(
+						command.playerId,
+						command.intensity,
+						command.source,
+					);
+				}
 				break;
+			}
 			case "start-match":
 				this.startMatch();
 				break;
@@ -399,16 +421,18 @@ export class ArenaScene extends Phaser.Scene {
 			aimGraphic,
 			label,
 			projectileLabel,
-			normalizedX: 0,
+			normalizedAim: 0,
+			aimActiveUntil: 0,
 			angle: station.aim.defaultAngle,
 			cooldownUntil: 0,
 			throwCount: 0,
 			nextType,
+			currentType: nextType,
 			ready: false,
 			stats: emptyStats(),
 		};
 		this.players.set(assignment.playerId, player);
-		this.setPlayerLabel(assignment.playerId, "CALIBRATE");
+		this.setPlayerLabel(assignment.playerId, "BUTTON THROW");
 	}
 
 	private removePlayer(playerId: string) {
@@ -431,8 +455,9 @@ export class ArenaScene extends Phaser.Scene {
 		const station = STATIONS[player.assignment.playerNumber];
 		const tint = PLAYER_HEX[player.assignment.color];
 		const graphic = player.aimGraphic;
+		const isActive = player.aimActiveUntil > this.time.now;
 		graphic.clear();
-		graphic.lineStyle(2, tint, 0.18);
+		graphic.lineStyle(isActive ? 3 : 2, tint, isActive ? 0.76 : 0.2);
 		graphic.lineBetween(
 			station.x,
 			station.y,
@@ -441,7 +466,10 @@ export class ArenaScene extends Phaser.Scene {
 		);
 		for (let index = 1; index <= 7; index += 1) {
 			const distance = index * 31;
-			graphic.fillStyle(tint, 0.32 - index * 0.025);
+			graphic.fillStyle(
+				tint,
+				(isActive ? 0.62 : 0.32) - index * (isActive ? 0.035 : 0.025),
+			);
 			graphic.fillCircle(
 				station.x + Math.cos(player.angle) * distance,
 				station.y + Math.sin(player.angle) * distance,
@@ -523,7 +551,11 @@ export class ArenaScene extends Phaser.Scene {
 		if (timeRemainingMs <= 0) this.endMatch();
 	}
 
-	private launchForPlayer(playerId: string, intensity: number) {
+	private launchForPlayer(
+		playerId: string,
+		intensity: number,
+		source: FlickSource,
+	) {
 		const player = this.players.get(playerId);
 		if (
 			!player ||
@@ -536,8 +568,10 @@ export class ArenaScene extends Phaser.Scene {
 		const definition = PROJECTILE_DEFINITIONS[projectileType];
 		const projectileId = crypto.randomUUID();
 		const station = STATIONS[player.assignment.playerNumber];
-		const x = station.x + Math.cos(player.angle) * 44;
-		const y = station.y + Math.sin(player.angle) * 44;
+		const launchAngle = mapAimAngle(player.normalizedAim, station.aim);
+		player.angle = launchAngle;
+		const x = station.x + Math.cos(launchAngle) * 44;
+		const y = station.y + Math.sin(launchAngle) * 44;
 		const shape =
 			definition.bodyShape === "circle"
 				? { type: "circle", radius: definition.radius ?? 12 }
@@ -565,8 +599,8 @@ export class ArenaScene extends Phaser.Scene {
 			.setDepth(5);
 		const speed = mapThrowSpeed(intensity) * 24 * definition.speedMultiplier;
 		body.setVelocity(
-			Math.cos(player.angle) * speed,
-			Math.sin(player.angle) * speed,
+			Math.cos(launchAngle) * speed,
+			Math.sin(launchAngle) * speed,
 		);
 		body.setAngularVelocity(
 			Phaser.Math.FloatBetween(
@@ -585,12 +619,18 @@ export class ArenaScene extends Phaser.Scene {
 		this.projectiles.set(projectileId, { body, metadata });
 		player.stats.throws += 1;
 		player.throwCount += 1;
+		player.currentType = projectileType;
 		player.nextType = nextProjectileType(
 			player.throwCount,
 			player.assignment.playerNumber,
 		);
-		player.cooldownUntil = this.time.now + 650;
-		this.bridge.emit({ type: "projectile-thrown", playerId, projectileType });
+		player.cooldownUntil = this.time.now + THROW_COOLDOWN_MS;
+		this.bridge.emit({
+			type: "projectile-thrown",
+			playerId,
+			projectileType,
+			source,
+		});
 		this.bridge.emit({
 			type: "stats-changed",
 			playerId,
@@ -758,6 +798,7 @@ export class ArenaScene extends Phaser.Scene {
 			player.stats = emptyStats();
 			player.throwCount = 0;
 			player.nextType = nextProjectileType(0, player.assignment.playerNumber);
+			player.currentType = player.nextType;
 			player.cooldownUntil = 0;
 			this.emitScore(player);
 		}
@@ -840,12 +881,14 @@ export class ArenaScene extends Phaser.Scene {
 			player = this.ensureKeyboardPlayer();
 		if (!player) return;
 		if (action.direction)
-			player.normalizedX = clamp(
-				player.normalizedX + action.direction * 0.18,
+			player.normalizedAim = clamp(
+				player.normalizedAim + action.direction * 0.18,
 				-1,
 				1,
 			);
-		if (action.throw) this.launchForPlayer(player.assignment.playerId, 0.78);
+		if (action.direction) player.aimActiveUntil = this.time.now + 280;
+		if (action.throw)
+			this.launchForPlayer(player.assignment.playerId, 0.78, "button");
 	}
 
 	private shutdown() {

@@ -1,3 +1,4 @@
+import type { FlickSource } from "../config/controls";
 import type {
 	MatchPhase,
 	MatchStanding,
@@ -11,9 +12,14 @@ export type ReactToGameEvent =
 	| { type: "player-joined"; player: PlayerAssignment }
 	| { type: "player-left"; playerId: string }
 	| { type: "player-ready"; playerId: string; ready: boolean }
-	| { type: "player-calibration"; playerId: string; calibrated: boolean }
-	| { type: "orientation"; playerId: string; normalizedX: number }
-	| { type: "flick"; playerId: string; intensity: number }
+	| { type: "player-motion-status"; playerId: string; enabled: boolean }
+	| { type: "aim"; playerId: string; normalizedAim: number }
+	| {
+			type: "flick";
+			playerId: string;
+			intensity: number;
+			source: FlickSource;
+	  }
 	| { type: "start-match" }
 	| { type: "reset-match" };
 
@@ -39,5 +45,12 @@ export type GameToReactEvent =
 			type: "projectile-thrown";
 			playerId: string;
 			projectileType: ProjectileType;
+			source: FlickSource;
+	  }
+	| {
+			type: "practice-throw";
+			playerId: string;
+			projectileType: ProjectileType;
+			source: FlickSource;
 	  }
 	| { type: "match-ended"; standings: MatchStanding[] };

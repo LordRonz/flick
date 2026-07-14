@@ -1,0 +1,432 @@
+.controller-shell .controller-card {
+	min-height: min(900px, calc(100svh - 44px));
+	overflow: visible;
+}
+
+.controller-shell .controller-player-header {
+	display: grid;
+	grid-template-columns: 64px minmax(0, 1fr) auto;
+	align-items: center;
+	gap: 14px;
+	padding: 32px 0 20px;
+}
+
+.controller-shell .controller-score-block {
+	display: grid;
+	justify-items: end;
+	gap: 4px;
+	font-family: var(--mono);
+}
+
+.controller-score-block span {
+	color: var(--muted);
+	font-size: 9px;
+	letter-spacing: 0.12em;
+}
+
+.controller-score-block strong {
+	color: var(--player-color);
+	font-size: 22px;
+}
+
+.controller-shell .controller-match-bar {
+	margin-bottom: 14px;
+}
+
+.tutorial-card {
+	margin: 12px 0 14px;
+	padding: 13px 14px;
+	border: 1px solid rgba(68, 216, 228, 0.25);
+	background: rgba(68, 216, 228, 0.055);
+}
+
+.tutorial-card header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	color: var(--cyan);
+	font-family: var(--mono);
+	font-size: 9px;
+	letter-spacing: 0.13em;
+}
+
+.tutorial-card header strong {
+	color: var(--muted);
+	font-weight: 400;
+}
+
+.tutorial-card header em {
+	color: #5b7074;
+	font-style: normal;
+}
+
+.tutorial-card h2 {
+	margin: 10px 0 4px;
+	color: var(--text);
+	font-size: 21px;
+	letter-spacing: -0.03em;
+}
+
+.tutorial-card p {
+	margin: 0;
+	color: var(--muted);
+	font-size: 12px;
+	line-height: 1.45;
+}
+
+.tutorial-card small {
+	display: block;
+	margin-top: 8px;
+	color: var(--mint);
+	font-family: var(--mono);
+	font-size: 10px;
+}
+
+.controller-aim-preview {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) 74px;
+	align-items: center;
+	gap: 12px;
+	margin: 8px 0 12px;
+	padding: 12px;
+	border: 1px solid rgba(116, 230, 178, 0.2);
+	background: rgba(116, 230, 178, 0.04);
+}
+
+.aim-preview-scope {
+	position: relative;
+	display: grid;
+	place-items: center;
+	width: 100%;
+	height: 74px;
+	overflow: hidden;
+	border: 1px solid rgba(116, 230, 178, 0.22);
+	background: rgba(8, 16, 22, 0.72);
+}
+
+.aim-preview-scope::before,
+.aim-preview-scope::after {
+	content: "";
+	position: absolute;
+	background: rgba(116, 230, 178, 0.14);
+}
+
+.aim-preview-scope::before {
+	width: 100%;
+	height: 1px;
+}
+
+.aim-preview-scope::after {
+	width: 1px;
+	height: 100%;
+}
+
+.aim-preview-direction {
+	position: absolute;
+	top: 7px;
+	z-index: 2;
+	color: var(--muted);
+	font-family: var(--mono);
+	font-size: 12px;
+	letter-spacing: 0.05em;
+}
+
+.aim-preview-line {
+	position: absolute;
+	left: 50%;
+	top: 50%;
+	z-index: 3;
+	width: 42%;
+	height: 3px;
+	transform-origin: left center;
+	background: var(--player-color);
+	box-shadow: 0 0 12px var(--player-color);
+	transition: transform 80ms ease-out;
+}
+
+.aim-preview-center {
+	position: absolute;
+	z-index: 4;
+	width: 10px;
+	height: 10px;
+	border: 2px solid var(--player-color);
+	border-radius: 50%;
+	box-shadow: 0 0 10px color-mix(in srgb, var(--player-color), transparent 40%);
+}
+
+.aim-readout {
+	display: grid;
+	gap: 5px;
+	font-family: var(--mono);
+}
+
+.aim-readout span,
+.aim-readout small {
+	color: var(--muted);
+	font-size: 9px;
+	letter-spacing: 0.1em;
+}
+
+.aim-readout strong {
+	color: var(--player-color);
+	font-size: 22px;
+}
+
+.aim-readout small {
+	letter-spacing: 0;
+}
+
+.controller-aim-surface {
+	position: relative;
+	display: grid;
+	place-items: center;
+	min-height: 136px;
+	margin: 0 0 13px;
+	overflow: hidden;
+	touch-action: none;
+	user-select: none;
+	overscroll-behavior: contain;
+	border: 1px solid rgba(68, 216, 228, 0.3);
+	background: linear-gradient(
+		180deg,
+		rgba(68, 216, 228, 0.075),
+		rgba(8, 16, 22, 0.9)
+	);
+	cursor: ew-resize;
+	-webkit-tap-highlight-color: transparent;
+}
+
+.controller-aim-surface:focus-visible {
+	outline: 2px solid var(--mint);
+	outline-offset: 3px;
+}
+
+.controller-aim-surface.is-dragging {
+	border-color: var(--player-color);
+	box-shadow: inset 0 0 30px
+		color-mix(in srgb, var(--player-color), transparent 85%);
+}
+
+.aim-surface-label {
+	position: relative;
+	z-index: 3;
+	color: var(--text);
+	font-family: var(--mono);
+	font-size: 11px;
+	letter-spacing: 0.18em;
+}
+
+.aim-surface-track {
+	position: absolute;
+	left: 10%;
+	right: 10%;
+	top: 69%;
+	height: 2px;
+	background: linear-gradient(
+		90deg,
+		var(--player-color),
+		rgba(237, 247, 245, 0.35),
+		var(--player-color)
+	);
+	box-shadow: 0 0 10px color-mix(in srgb, var(--player-color), transparent 55%);
+}
+
+.aim-surface-handle {
+	position: absolute;
+	top: calc(69% - 10px);
+	z-index: 4;
+	display: grid;
+	place-items: center;
+	width: 20px;
+	height: 20px;
+	border: 2px solid var(--player-color);
+	border-radius: 50%;
+	background: var(--ink);
+	box-shadow: 0 0 15px color-mix(in srgb, var(--player-color), transparent 30%);
+	transition: left 90ms ease-out;
+}
+
+.controller-aim-surface.is-dragging .aim-surface-handle {
+	transition: none;
+}
+
+.aim-surface-handle span {
+	width: 6px;
+	height: 6px;
+	border-radius: 50%;
+	background: var(--player-color);
+}
+
+.aim-surface-limit {
+	position: absolute;
+	top: calc(69% - 9px);
+	z-index: 2;
+	color: var(--muted);
+	font-family: var(--mono);
+	font-size: 14px;
+}
+
+.aim-surface-left {
+	left: 4%;
+}
+.aim-surface-right {
+	right: 4%;
+}
+
+.controller-throw-instruction {
+	display: grid;
+	gap: 4px;
+	margin: 0;
+	text-align: center;
+}
+
+.controller-throw-instruction strong {
+	color: var(--mint);
+	font-family: var(--mono);
+	font-size: 11px;
+	letter-spacing: 0.16em;
+}
+
+.controller-throw-instruction span,
+.controller-safety-note {
+	color: var(--muted);
+	font-family: var(--mono);
+	font-size: 10px;
+	line-height: 1.45;
+}
+
+.controller-safety-note {
+	margin: 6px 0 0;
+	color: #6f8588;
+	text-align: center;
+}
+
+.controller-throw {
+	margin-top: 13px;
+}
+
+.throw-button {
+	position: relative;
+	display: grid;
+	place-items: center;
+	width: 100%;
+	min-height: 76px;
+	overflow: hidden;
+	border: 1px solid var(--mint);
+	border-radius: 3px;
+	color: var(--ink);
+	background: var(--mint);
+}
+
+.throw-button:disabled {
+	border-color: var(--line);
+	color: var(--muted);
+	background: var(--surface-raised);
+}
+
+.throw-button-progress {
+	position: absolute;
+	inset: 0 auto 0 0;
+	background: rgba(8, 12, 16, 0.16);
+	transition: width 50ms linear;
+}
+
+.throw-button strong,
+.throw-button small {
+	position: relative;
+	z-index: 1;
+}
+
+.throw-button strong {
+	font-size: 23px;
+	letter-spacing: 0.14em;
+}
+
+.throw-button small {
+	margin-top: 4px;
+	font-family: var(--mono);
+	font-size: 9px;
+	letter-spacing: 0.06em;
+}
+
+.motion-status {
+	display: block;
+	margin: -2px 2px 2px;
+	color: var(--muted);
+	font-family: var(--mono);
+	font-size: 9px;
+	line-height: 1.4;
+}
+
+.motion-status-enabled {
+	color: var(--mint);
+}
+.motion-status-denied,
+.motion-status-unsupported {
+	color: #ff9f91;
+}
+
+.sensitivity-control {
+	display: grid;
+	gap: 8px;
+	margin: 12px 0 4px;
+}
+
+.sensitivity-control > div {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 6px;
+}
+
+.sensitivity-button {
+	min-height: 32px;
+	color: var(--muted);
+	border: 1px solid var(--line);
+	background: transparent;
+	font-family: var(--mono);
+	font-size: 9px;
+}
+
+.sensitivity-button.is-selected {
+	color: var(--ink);
+	border-color: var(--mint);
+	background: var(--mint);
+}
+
+@media (max-width: 560px) {
+	.controller-shell .controller-card {
+		min-height: 100svh;
+		padding: 18px;
+	}
+
+	.controller-shell .controller-player-header {
+		grid-template-columns: 54px minmax(0, 1fr) auto;
+		gap: 10px;
+		padding-top: 28px;
+	}
+
+	.controller-shell .controller-avatar {
+		width: 54px;
+		height: 54px;
+	}
+
+	.controller-shell .controller-player-header h1 {
+		font-size: 21px;
+	}
+
+	.controller-score-block strong {
+		font-size: 18px;
+	}
+
+	.controller-aim-surface {
+		min-height: 128px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.aim-preview-line,
+	.aim-surface-handle,
+	.throw-button-progress {
+		transition: none;
+	}
+}

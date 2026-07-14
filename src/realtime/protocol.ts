@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { FLICK_SOURCES } from "../game/config/controls";
 import type {
 	MatchPhase,
 	PlayerColor,
@@ -11,6 +12,7 @@ import { PLAYER_COLORS } from "../game/types";
 export const roomCodeSchema = z.string().regex(/^[A-HJ-NP-Z2-9]{6}$/);
 
 const finiteNumber = z.number().finite();
+const flickSourceSchema = z.enum(FLICK_SOURCES);
 const playerNumberSchema = z.union([
 	z.literal(1),
 	z.literal(2),
@@ -36,7 +38,7 @@ const playerAssignmentSchema = z.object({
 
 const lobbyPlayerSchema = playerAssignmentSchema.extend({
 	ready: z.boolean(),
-	calibrated: z.boolean(),
+	motionEnabled: z.boolean(),
 	connected: z.boolean(),
 });
 
@@ -52,19 +54,38 @@ const standingSchema = playerAssignmentSchema.extend({
 	...playerRoundStatsSchema.shape,
 });
 
+const flickAcceptedSchema = z
+	.object({
+		type: z.literal("flick-accepted"),
+		playerId: z.string().uuid(),
+		projectileType: projectileTypeSchema,
+		practice: z.boolean().optional(),
+	})
+	.strict();
+
 const controllerInputSchema = z.discriminatedUnion("type", [
-	z.object({
-		type: z.literal("orientation"),
-		normalizedX: finiteNumber.min(-1).max(1),
-		timestamp: finiteNumber,
-	}),
-	z.object({
-		type: z.literal("flick"),
-		intensity: finiteNumber.min(0).max(1),
-		timestamp: finiteNumber,
-	}),
-	z.object({ type: z.literal("ready"), ready: z.boolean() }),
-	z.object({ type: z.literal("calibration-status"), calibrated: z.boolean() }),
+	z
+		.object({
+			type: z.literal("aim"),
+			normalizedAim: finiteNumber.min(-1).max(1),
+			timestamp: finiteNumber,
+		})
+		.strict(),
+	z
+		.object({
+			type: z.literal("flick"),
+			intensity: finiteNumber.min(0).max(1),
+			source: flickSourceSchema,
+			timestamp: finiteNumber,
+		})
+		.strict(),
+	z.object({ type: z.literal("ready"), ready: z.boolean() }).strict(),
+	z
+		.object({
+			type: z.literal("motion-status"),
+			enabled: z.boolean(),
+		})
+		.strict(),
 ]);
 
 export const ControllerMessageSchema = controllerInputSchema;
@@ -75,11 +96,7 @@ export const HostToRoomMessageSchema = z.discriminatedUnion("type", [
 		phase: matchPhaseSchema,
 		timeRemainingMs: finiteNumber.min(0).optional(),
 	}),
-	z.object({
-		type: z.literal("flick-accepted"),
-		playerId: z.string().uuid(),
-		projectileType: projectileTypeSchema,
-	}),
+	flickAcceptedSchema,
 	z.object({
 		type: z.literal("hit-confirmed"),
 		attackerPlayerId: z.string().uuid(),
@@ -121,11 +138,13 @@ export const RoomToHostMessageSchema = z.discriminatedUnion("type", [
 		type: z.literal("lobby-state"),
 		players: z.array(lobbyPlayerSchema).max(4),
 	}),
-	z.object({
-		type: z.literal("controller-input"),
-		playerId: z.string().uuid(),
-		input: controllerInputSchema,
-	}),
+	z
+		.object({
+			type: z.literal("controller-input"),
+			playerId: z.string().uuid(),
+			input: controllerInputSchema,
+		})
+		.strict(),
 	z.object({ type: z.literal("error"), message: z.string().min(1).max(180) }),
 ]);
 
@@ -140,11 +159,7 @@ export const HostMessageSchema = z.discriminatedUnion("type", [
 		phase: matchPhaseSchema,
 		timeRemainingMs: finiteNumber.min(0).optional(),
 	}),
-	z.object({
-		type: z.literal("flick-accepted"),
-		playerId: z.string().uuid(),
-		projectileType: projectileTypeSchema,
-	}),
+	flickAcceptedSchema,
 	z.object({
 		type: z.literal("score-update"),
 		playerId: z.string().uuid(),
@@ -175,6 +190,8 @@ export const HostMessageSchema = z.discriminatedUnion("type", [
 ]);
 
 export type ControllerMessage = z.infer<typeof ControllerMessageSchema>;
+export type AimInputMessage = Extract<ControllerMessage, { type: "aim" }>;
+export type FlickInputMessage = Extract<ControllerMessage, { type: "flick" }>;
 export type HostToRoomMessage = z.infer<typeof HostToRoomMessageSchema>;
 export type RoomToHostMessage = z.infer<typeof RoomToHostMessageSchema>;
 export type HostMessage = z.infer<typeof HostMessageSchema>;

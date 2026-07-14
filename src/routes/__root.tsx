@@ -9,7 +9,7 @@ export const Route = createRootRoute({
       { charSet: 'utf-8' },
       { name: 'viewport', content: 'width=device-width, initial-scale=1, viewport-fit=cover' },
       { title: 'Flick — phone-controlled browser game' },
-      { name: 'description', content: 'Use your iPhone to tilt and flick a physics game on your laptop.' },
+      { name: 'description', content: 'Drag to aim, flick to throw, and battle across a physics game on your laptop.' },
     ],
     links: [{ rel: 'stylesheet', href: appCss }],
   }),

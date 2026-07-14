@@ -1,6 +1,6 @@
 # Flick Arena
 
-Flick Arena is a local multiplayer office battle. One laptop renders the Phaser game; two to four phones join the room over WebSockets and become tilt-and-flick controllers.
+Flick Arena is a local multiplayer office battle. One laptop renders the Phaser game; two to four phones join the room over WebSockets and become drag-and-flick controllers.
 
 The host owns the match, physics, scoring, and results. The Durable Object only owns room membership, player slots, reconnection grace, and validated message relay.
 
@@ -13,9 +13,9 @@ pnpm dev
 
 1. Open `http://localhost:3000` and click **Create Game**.
 2. Open the controller URL in two to four additional desktop tabs.
-3. Use the controller **Show Debug Panel → Test Flick** button or the keyboard fallback to verify input.
+3. Complete the short controller tutorial: drag the aim marker, then tap **THROW** for a practice throw.
 4. Mark at least two controllers ready, then start the round on the host.
-5. Test the 3-2-1-FLICK countdown, the 60-second timer, the scoreboard, and **Play Again**.
+5. Test dragging, the 3-2-1-FLICK countdown, the 60-second timer, the scoreboard, and **Play Again**.
 
 Keyboard fallback:
 
@@ -37,11 +37,11 @@ pnpm deploy
 
 1. Open the deployed HTTPS URL on the laptop and create a game.
 2. Scan the host QR code with each phone’s camera.
-3. On each controller, tap **Enable Motion Controls** and grant permission.
-4. Confirm the controller reports **SCREEN AWAKE**. The app requests a Screen Wake Lock automatically after motion controls start.
-5. Hold the phone in portrait and tap **Calibrate Phone** while still.
+3. Drag the marker left and right to aim. Release without firing.
+4. Tap **Enable Physical Flick** if you want motion throws; permission is optional because **THROW** always works.
+5. Hold the phone securely and make a short forward motion, or tap **THROW**.
 6. Confirm the assigned number/color, then tap **Mark Me Ready**.
-7. Start the round on the host. Tilt to aim and flick forward to throw.
+7. Start the round on the host. Drag to aim and flick to throw.
 
 The controller stores a room-scoped session ID in `localStorage`, so a refresh can reclaim the same player slot during the approximately 15-second reconnect grace period. A fifth simultaneous controller is rejected.
 
@@ -60,11 +60,11 @@ The host game uses Phaser `4.2.1` with Phaser Matter Physics. Phaser is imported
 
 ## Device limitations and known rough edges
 
-- iPhone Safari requires motion permission from a direct user gesture and normally requires HTTPS. Permission can need to be granted again after a reload or orientation change.
-- The controller requests Screen Wake Lock automatically over HTTPS so supported browsers do not dim or auto-lock during play. Battery saver, low power mode, older browsers, or a browser policy can reject or revoke it; the controller will show a warning and remain usable, but the phone must then be kept awake manually.
+- iPhone Safari requires motion permission from a direct user gesture and normally requires HTTPS. Motion permission is only used for physical flick detection; it is not required to aim or use the Throw button.
+- The controller requests Screen Wake Lock automatically over HTTPS so supported browsers do not dim or auto-lock during play. Battery saver, low power mode, older browsers, or a browser policy can reject or revoke it; the controller will show a warning and remain usable, but you must then disable auto-lock manually or keep the phone awake.
 - Manually locking the phone or sending the browser to the background pauses reliable motion and WebSocket control. Unlock or return to the controller page to let it reacquire the wake lock; a native app would be required for guaranteed locked-screen control.
 - Some iPhone browsers and embedded browsers do not expose `navigator.vibrate`; haptic feedback is optional and fails silently.
-- Android motion event names and sensor values vary by browser and device. Chrome over HTTPS is the recommended Android test target.
+- Android motion event names and sensor values vary by browser and device. Chrome over HTTPS is the recommended Android test target; unsupported or denied sensors fall back to the Throw button.
 - Audio is intentionally not required for the playable slice yet; the arena uses Phaser-native visual effects, particles, and camera shake.
 - Temporary procedural art is used for the office, props, players, and projectiles. The gameplay is complete enough to test the arena loop, but the art and physics tuning are still prototype quality.
 

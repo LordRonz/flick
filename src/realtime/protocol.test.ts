@@ -6,22 +6,40 @@ import {
 } from "./protocol";
 
 describe("realtime protocol", () => {
-	it("accepts valid orientation messages", () => {
+	it("accepts valid aim messages", () => {
 		expect(
 			parseJsonMessage(
-				'{"type":"orientation","normalizedX":0.4,"timestamp":1}',
+				'{"type":"aim","normalizedAim":0.4,"timestamp":1}',
 				ControllerMessageSchema,
 			),
-		).toEqual({ type: "orientation", normalizedX: 0.4, timestamp: 1 });
+		).toEqual({ type: "aim", normalizedAim: 0.4, timestamp: 1 });
 	});
 
 	it("rejects out-of-range input", () => {
 		expect(
 			parseJsonMessage(
-				'{"type":"flick","intensity":2,"timestamp":1}',
+				'{"type":"flick","intensity":2,"source":"button","timestamp":1}',
 				ControllerMessageSchema,
 			),
 		).toBeNull();
+	});
+
+	it("requires a known flick source", () => {
+		expect(
+			parseJsonMessage(
+				'{"type":"flick","intensity":0.75,"source":"unknown","timestamp":1}',
+				ControllerMessageSchema,
+			),
+		).toBeNull();
+	});
+
+	it("accepts motion status without requiring motion for ready", () => {
+		expect(
+			parseJsonMessage(
+				'{"type":"motion-status","enabled":false}',
+				ControllerMessageSchema,
+			),
+		).toEqual({ type: "motion-status", enabled: false });
 	});
 
 	it("rejects oversized payloads", () => {

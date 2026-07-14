@@ -22,7 +22,12 @@ export const STATIONS: Record<PlayerNumber, Station> = {
 		playerNumber: 2,
 		x: 1120,
 		y: 610,
-		aim: { minAngle: -2.96, maxAngle: -1.79, defaultAngle: -2.36 },
+		aim: {
+			minAngle: -2.96,
+			maxAngle: -1.79,
+			defaultAngle: -2.36,
+			invertInput: true,
+		},
 	},
 	3: {
 		playerNumber: 3,
@@ -34,7 +39,12 @@ export const STATIONS: Record<PlayerNumber, Station> = {
 		playerNumber: 4,
 		x: 1058,
 		y: 284,
-		aim: { minAngle: -2.78, maxAngle: -1.55, defaultAngle: -2.18 },
+		aim: {
+			minAngle: -2.78,
+			maxAngle: -1.55,
+			defaultAngle: -2.18,
+			invertInput: true,
+		},
 	},
 };
 

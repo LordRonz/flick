@@ -1,16 +1,33 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useRef, useState } from "react";
+import {
+	type KeyboardEvent as ReactKeyboardEvent,
+	type PointerEvent as ReactPointerEvent,
+	useEffect,
+	useRef,
+	useState,
+} from "react";
 import { z } from "zod";
+import "../controller/controller.css";
+import {
+	type AimSendState,
+	nextAimMessage,
+	pointerXToNormalizedAim,
+} from "../controller/aim-input";
 import {
 	detectFlick,
-	FLICK_DETECTOR_CONFIG,
+	FLICK_SENSITIVITY_CONFIG,
+	type FlickSensitivity,
+	forwardAccelerationMagnitude,
 } from "../controller/flick-detector";
-import { normalizeOrientation, smoothValue } from "../controller/motion";
 import {
 	createScreenWakeLock,
 	type ScreenWakeLockStatus,
 } from "../controller/screen-wake-lock";
+import { STATIONS } from "../game/config/arena";
+import { type FlickSource, THROW_COOLDOWN_MS } from "../game/config/controls";
 import { nextProjectileType } from "../game/config/projectiles";
+import { mapAimAngle } from "../game/systems/aim";
+import { clamp } from "../game/systems/math";
 import type {
 	LobbyPlayer,
 	MatchPhase,
@@ -32,6 +49,10 @@ export const Route = createFileRoute("/controller")({
 });
 
 type PermissionState = "Not enabled" | "Enabled" | "Denied" | "Unsupported";
+type TutorialStep = "aim" | "throw" | "ready" | "complete";
+type ThrowSource = FlickSource;
+
+const TUTORIAL_STORAGE_KEY = "flick-tutorial-complete:v1";
 
 function ControllerPage() {
 	const { room } = Route.useSearch();
@@ -39,12 +60,27 @@ function ControllerPage() {
 	const sessionIdRef = useRef("");
 	const assignmentRef = useRef<PlayerAssignment | null>(null);
 	const throwCountRef = useRef(0);
-	const baselineRef = useRef<number | null>(null);
-	const latestGammaRef = useRef(0);
-	const sensorsEnabledRef = useRef(false);
-	const tiltRef = useRef(0);
-	const lastSentRef = useRef({ value: 0, at: 0 });
+	const motionListenerRef = useRef<((event: DeviceMotionEvent) => void) | null>(
+		null,
+	);
 	const detectorRef = useRef({ lastFlickAt: -Infinity });
+	const aimSurfaceRef = useRef<HTMLDivElement | null>(null);
+	const activePointerIdRef = useRef<number | null>(null);
+	const aimRef = useRef(0);
+	const aimSendStateRef = useRef<AimSendState>({
+		lastSentValue: 0,
+		lastSentAt: -Infinity,
+	});
+	const aimRangeRef = useRef({ min: 0, max: 0 });
+	const cooldownRef = useRef(0);
+	const phaseRef = useRef<MatchPhase>("lobby");
+	const tutorialStepRef = useRef<TutorialStep>("aim");
+	const sensitivityRef = useRef<FlickSensitivity>("normal");
+	const confirmationTimerRef = useRef<number | undefined>(undefined);
+	const motionEventCountRef = useRef(0);
+	const lastMotionUiAtRef = useRef(0);
+	const aimMessageTimesRef = useRef<number[]>([]);
+
 	const [connection, setConnection] = useState("Connecting");
 	const [permission, setPermission] = useState<PermissionState>("Not enabled");
 	const [assignment, setAssignment] = useState<PlayerAssignment | null>(null);
@@ -53,16 +89,25 @@ function ControllerPage() {
 	const [timeRemainingMs, setTimeRemainingMs] = useState(0);
 	const [score, setScore] = useState(0);
 	const [rank, setRank] = useState<number | null>(null);
-	const [tilt, setTilt] = useState(0);
+	const [aim, setAim] = useState(0);
+	const [isAiming, setIsAiming] = useState(false);
 	const [magnitude, setMagnitude] = useState(0);
+	const [motionEventCount, setMotionEventCount] = useState(0);
 	const [lastFlick, setLastFlick] = useState(0);
+	const [lastThrowSource, setLastThrowSource] = useState<ThrowSource | null>(
+		null,
+	);
+	const [aimMessagesPerSecond, setAimMessagesPerSecond] = useState(0);
 	const [projectile, setProjectile] = useState<ProjectileType>("paper-ball");
 	const [nextProjectile, setNextProjectile] =
 		useState<ProjectileType>("paper-ball");
 	const [cooldownMs, setCooldownMs] = useState(0);
 	const [confirmation, setConfirmation] = useState("");
 	const [ready, setReady] = useState(false);
-	const [calibrated, setCalibrated] = useState(false);
+	const [tutorialStep, setTutorialStep] = useState<TutorialStep>(() =>
+		readTutorialComplete() ? "complete" : "aim",
+	);
+	const [sensitivity, setSensitivity] = useState<FlickSensitivity>("normal");
 	const [debugOpen, setDebugOpen] = useState(false);
 	const [error, setError] = useState("");
 	const [wakeLockStatus, setWakeLockStatus] =
@@ -71,14 +116,32 @@ function ControllerPage() {
 		null,
 	);
 
+	phaseRef.current = phase;
+	tutorialStepRef.current = tutorialStep;
+	sensitivityRef.current = sensitivity;
+
 	useEffect(() => {
 		if (cooldownMs <= 0) return;
 		const interval = window.setInterval(
-			() => setCooldownMs((current) => Math.max(0, current - 50)),
+			() =>
+				setCooldownMs((current) => {
+					const next = Math.max(0, current - 50);
+					cooldownRef.current = next;
+					return next;
+				}),
 			50,
 		);
 		return () => window.clearInterval(interval);
 	}, [cooldownMs]);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: The interval reads stable refs and only follows active drag state.
+	useEffect(() => {
+		if (!isAiming) return;
+		const interval = window.setInterval(() => {
+			sendAimValue(aimRef.current);
+		}, 66);
+		return () => window.clearInterval(interval);
+	}, [isAiming]);
 
 	useEffect(() => {
 		const controller = createScreenWakeLock(setWakeLockStatus);
@@ -89,7 +152,7 @@ function ControllerPage() {
 		};
 	}, []);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: Sensor handlers use refs and the socket lifecycle is keyed by room.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Sensor and socket handlers use refs; the lifecycle is keyed by room.
 	useEffect(() => {
 		if (!room) return;
 		if (typeof WebSocket === "undefined") {
@@ -137,16 +200,25 @@ function ControllerPage() {
 				const current = message.players.find(
 					(player) => player.playerId === assignmentRef.current?.playerId,
 				);
-				if (current) {
-					setReady(current.ready);
-					setCalibrated(current.calibrated);
-				}
+				if (current) setReady(current.ready);
 			} else if (message.type === "match-state") {
+				phaseRef.current = message.phase;
 				setPhase(message.phase);
 				setTimeRemainingMs(message.timeRemainingMs ?? 0);
-			} else if (message.type === "flick-accepted") {
+			} else if (
+				message.type === "flick-accepted" &&
+				message.playerId === assignmentRef.current?.playerId
+			) {
+				if (message.practice) {
+					tutorialStepRef.current = "ready";
+					setTutorialStep("ready");
+					showConfirmation("PRACTICE THROW ACCEPTED");
+					vibrate(70);
+					return;
+				}
 				throwCountRef.current += 1;
-				setCooldownMs(650);
+				cooldownRef.current = THROW_COOLDOWN_MS;
+				setCooldownMs(THROW_COOLDOWN_MS);
 				setProjectile(message.projectileType);
 				setNextProjectile(
 					nextProjectileType(
@@ -154,8 +226,7 @@ function ControllerPage() {
 						assignmentRef.current?.playerNumber ?? 1,
 					),
 				);
-				setLastFlick((current) => current || 0.8);
-				showConfirmation("FLICK ACCEPTED");
+				showConfirmation("THROW ACCEPTED");
 				vibrate(50);
 			} else if (
 				message.type === "score-update" &&
@@ -180,6 +251,7 @@ function ControllerPage() {
 				);
 				setRank(standing?.rank ?? null);
 				setPhase("results");
+				phaseRef.current = "results";
 				vibrate(240);
 			} else if (message.type === "error") {
 				setError(message.message);
@@ -194,10 +266,9 @@ function ControllerPage() {
 		socket.onerror = () => setConnection("Error");
 		return () => {
 			socket.close();
-			if (sensorsEnabledRef.current) {
-				window.removeEventListener("deviceorientation", handleOrientation);
-				window.removeEventListener("devicemotion", handleMotion);
-				sensorsEnabledRef.current = false;
+			if (motionListenerRef.current) {
+				window.removeEventListener("devicemotion", motionListenerRef.current);
+				motionListenerRef.current = null;
 			}
 			socketRef.current = null;
 		};
@@ -207,112 +278,230 @@ function ControllerPage() {
 		sendSocketMessage(socketRef.current, message);
 	}
 
-	function handleOrientation(event: DeviceOrientationEvent) {
-		if (event.gamma == null) return;
-		latestGammaRef.current = event.gamma;
-		if (baselineRef.current == null) baselineRef.current = event.gamma;
-		const next = smoothValue(
-			tiltRef.current,
-			normalizeOrientation(event.gamma, baselineRef.current),
+	function sendAimValue(value: number, force = false) {
+		const timestamp = Date.now();
+		const next = nextAimMessage(
+			value,
+			timestamp,
+			aimSendStateRef.current,
+			force,
 		);
-		tiltRef.current = next;
-		setTilt(next);
-		const now = Date.now();
-		const changed = Math.abs(next - lastSentRef.current.value) > 0.035;
-		const due = now - lastSentRef.current.at >= 100;
-		if (due && (changed || now - lastSentRef.current.at > 500)) {
-			send({ type: "orientation", normalizedX: next, timestamp: now });
-			lastSentRef.current = { value: next, at: now };
+		if (!next) return;
+		aimSendStateRef.current = next.state;
+		send(next.message);
+		aimMessageTimesRef.current = aimMessageTimesRef.current.filter(
+			(at) => timestamp - at < 1000,
+		);
+		aimMessageTimesRef.current.push(timestamp);
+		setAimMessagesPerSecond(aimMessageTimesRef.current.length);
+	}
+
+	function updateAimValue(value: number, force = false) {
+		const next = clamp(Number.isFinite(value) ? value : 0, -1, 1);
+		aimRef.current = next;
+		setAim(next);
+		if (tutorialStepRef.current === "aim") {
+			aimRangeRef.current = {
+				min: Math.min(aimRangeRef.current.min, next),
+				max: Math.max(aimRangeRef.current.max, next),
+			};
+			if (aimRangeRef.current.max - aimRangeRef.current.min >= 0.55) {
+				tutorialStepRef.current = "throw";
+				setTutorialStep("throw");
+				showConfirmation("AIM STEP COMPLETE");
+			}
+		}
+		sendAimValue(next, force);
+	}
+
+	function updateAimFromPointer(
+		event: ReactPointerEvent<HTMLDivElement>,
+		force = false,
+	) {
+		const surface = aimSurfaceRef.current;
+		if (!surface) return;
+		const rect = surface.getBoundingClientRect();
+		updateAimValue(
+			pointerXToNormalizedAim(event.clientX, rect.left, rect.width),
+			force,
+		);
+	}
+
+	function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
+		if (!event.isPrimary || activePointerIdRef.current !== null) return;
+		activePointerIdRef.current = event.pointerId;
+		setIsAiming(true);
+		try {
+			event.currentTarget.setPointerCapture(event.pointerId);
+		} catch {
+			/* Pointer capture is optional on older debugging browsers. */
+		}
+		updateAimFromPointer(event, true);
+	}
+
+	function handlePointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+		if (event.pointerId !== activePointerIdRef.current) return;
+		updateAimFromPointer(event);
+	}
+
+	function handlePointerUp(event: ReactPointerEvent<HTMLDivElement>) {
+		if (event.pointerId !== activePointerIdRef.current) return;
+		updateAimFromPointer(event, true);
+		activePointerIdRef.current = null;
+		setIsAiming(false);
+		try {
+			event.currentTarget.releasePointerCapture(event.pointerId);
+		} catch {
+			/* Pointer capture is optional on older debugging browsers. */
+		}
+	}
+
+	function handlePointerCancel(event: ReactPointerEvent<HTMLDivElement>) {
+		if (event.pointerId !== activePointerIdRef.current) return;
+		activePointerIdRef.current = null;
+		setIsAiming(false);
+	}
+
+	function handleAimKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+		if (event.key === "ArrowLeft") {
+			event.preventDefault();
+			updateAimValue(aimRef.current - 0.08);
+		} else if (event.key === "ArrowRight") {
+			event.preventDefault();
+			updateAimValue(aimRef.current + 0.08);
+		} else if (event.key === "Home") {
+			event.preventDefault();
+			updateAimValue(-1, true);
+		} else if (event.key === "End") {
+			event.preventDefault();
+			updateAimValue(1, true);
 		}
 	}
 
 	function handleMotion(event: DeviceMotionEvent) {
+		motionEventCountRef.current += 1;
 		const acceleration =
 			event.acceleration ?? event.accelerationIncludingGravity;
 		const x = acceleration?.x ?? 0;
 		const y = acceleration?.y ?? 0;
 		const z = acceleration?.z ?? 0;
 		const nextMagnitude = Math.sqrt(x * x + y * y + z * z);
-		setMagnitude(nextMagnitude);
-		const result = detectFlick(nextMagnitude, detectorRef.current, Date.now());
+		const forwardMagnitude = forwardAccelerationMagnitude(acceleration);
+		const now = Date.now();
+		if (now - lastMotionUiAtRef.current >= 100) {
+			lastMotionUiAtRef.current = now;
+			setMagnitude(nextMagnitude);
+			setMotionEventCount(motionEventCountRef.current);
+		}
+		const result = detectFlick(
+			forwardMagnitude,
+			detectorRef.current,
+			now,
+			FLICK_SENSITIVITY_CONFIG[sensitivityRef.current],
+		);
 		detectorRef.current = result.state;
-		if (result.flicked) sendFlick(result.intensity);
+		if (
+			result.flicked &&
+			(phaseRef.current === "playing" || tutorialStepRef.current === "throw")
+		)
+			sendFlick(result.intensity, "motion");
 	}
 
 	async function enableMotion() {
 		setError("");
-		if (
-			!("DeviceMotionEvent" in window) ||
-			!("DeviceOrientationEvent" in window)
-		) {
+		if (!("DeviceMotionEvent" in window)) {
 			setPermission("Unsupported");
-			setError("This browser does not expose motion sensors.");
+			send({ type: "motion-status", enabled: false });
+			setError("Physical flick is unavailable. Use the Throw button instead.");
 			return;
 		}
 		try {
 			const motion = window.DeviceMotionEvent as typeof DeviceMotionEvent & {
 				requestPermission?: () => Promise<string>;
 			};
-			const orientation =
-				window.DeviceOrientationEvent as typeof DeviceOrientationEvent & {
-					requestPermission?: () => Promise<string>;
-				};
 			if (
 				motion.requestPermission &&
 				(await motion.requestPermission()) !== "granted"
 			)
 				throw new Error("denied");
-			if (
-				orientation.requestPermission &&
-				(await orientation.requestPermission()) !== "granted"
-			)
-				throw new Error("denied");
-			if (!sensorsEnabledRef.current) {
-				window.addEventListener("deviceorientation", handleOrientation);
+			if (!motionListenerRef.current) {
+				motionListenerRef.current = handleMotion;
 				window.addEventListener("devicemotion", handleMotion);
-				sensorsEnabledRef.current = true;
 			}
 			setPermission("Enabled");
-			if ((await wakeLockRef.current?.request()) === "active") {
+			send({ type: "motion-status", enabled: true });
+			if ((await wakeLockRef.current?.request()) === "active")
 				showConfirmation("SCREEN AWAKE");
-			}
+			else showConfirmation("PHYSICAL FLICK ENABLED");
 		} catch {
 			setPermission("Denied");
-			setError(
-				"Motion permission denied. Enable it in Safari settings, then reload this page.",
-			);
+			send({ type: "motion-status", enabled: false });
+			setError("Physical flick unavailable — use the Throw button.");
 		}
 	}
 
-	function calibrate() {
-		setError("");
-		if (permission !== "Enabled") {
-			setError("Enable motion controls first.");
+	function sendFlick(intensity: number, source: ThrowSource) {
+		if (
+			cooldownRef.current > 0 ||
+			(phaseRef.current !== "playing" && tutorialStepRef.current !== "throw")
+		)
 			return;
-		}
-		baselineRef.current = latestGammaRef.current;
-		tiltRef.current = 0;
-		setTilt(0);
-		setCalibrated(true);
-		send({ type: "calibration-status", calibrated: true });
-		showConfirmation("CALIBRATED");
+		const safeIntensity = clamp(
+			Number.isFinite(intensity) ? intensity : 0.75,
+			0,
+			1,
+		);
+		cooldownRef.current = THROW_COOLDOWN_MS;
+		setCooldownMs(THROW_COOLDOWN_MS);
+		setLastFlick(safeIntensity);
+		setLastThrowSource(source);
+		showConfirmation(source === "button" ? "THROW SENT" : "FLICK SENT");
+		vibrate(source === "button" ? 45 : 70);
+		send({
+			type: "flick",
+			intensity: safeIntensity,
+			source,
+			timestamp: Date.now(),
+		});
 	}
 
 	function toggleReady() {
+		if (!assignment) return;
+		if (!ready && tutorialStepRef.current === "ready") {
+			tutorialStepRef.current = "complete";
+			setTutorialStep("complete");
+			writeTutorialComplete(true);
+		}
+		if (!ready && tutorialStepRef.current !== "complete") {
+			showConfirmation("FINISH THE QUICK TUTORIAL");
+			return;
+		}
 		const next = !ready;
 		setReady(next);
 		send({ type: "ready", ready: next });
 		showConfirmation(next ? "READY UP" : "NOT READY");
 	}
 
-	function sendFlick(intensity: number) {
-		setLastFlick(intensity);
-		send({ type: "flick", intensity, timestamp: Date.now() });
+	function replayTutorial() {
+		writeTutorialComplete(false);
+		if (ready) {
+			setReady(false);
+			send({ type: "ready", ready: false });
+		}
+		tutorialStepRef.current = "aim";
+		aimRangeRef.current = { min: aimRef.current, max: aimRef.current };
+		setTutorialStep("aim");
+		showConfirmation("TUTORIAL RESTARTED");
 	}
 
 	function showConfirmation(message: string) {
 		setConfirmation(message);
-		window.setTimeout(() => setConfirmation(""), 900);
+		if (confirmationTimerRef.current)
+			window.clearTimeout(confirmationTimerRef.current);
+		confirmationTimerRef.current = window.setTimeout(
+			() => setConfirmation(""),
+			1100,
+		);
 	}
 
 	if (!room)
@@ -330,12 +519,24 @@ function ControllerPage() {
 		);
 
 	const color = assignment?.color ?? "blue";
-	const wakeLockCopy = screenWakeLockCopy(wakeLockStatus);
 	const currentPlayer = players.find(
 		(player) => player.playerId === assignment?.playerId,
 	);
 	const seconds = Math.ceil(timeRemainingMs / 1000);
-	const aimDegrees = tilt * 28;
+	const stationAimAngle = assignment
+		? mapAimAngle(aim, STATIONS[assignment.playerNumber].aim)
+		: 0;
+	const aimDegrees = Math.round((stationAimAngle * 180) / Math.PI);
+	const aimPosition = ((aim + 1) / 2) * 100;
+	const throwProgress = cooldownMs
+		? Math.max(0, Math.min(1, 1 - cooldownMs / THROW_COOLDOWN_MS))
+		: 1;
+	const canThrow =
+		Boolean(assignment) &&
+		cooldownMs === 0 &&
+		(phase === "playing" || tutorialStep === "throw");
+	const tutorial = tutorialCopy(tutorialStep);
+	const wakeLockCopy = screenWakeLockCopy(wakeLockStatus);
 
 	return (
 		<main className={`controller-shell color-${color}`}>
@@ -352,6 +553,7 @@ function ControllerPage() {
 						{connection}
 					</span>
 				</header>
+
 				<section className="controller-player-header">
 					<div className="controller-avatar">
 						<span>{assignment ? `P${assignment.playerNumber}` : "—"}</span>
@@ -365,69 +567,150 @@ function ControllerPage() {
 							Room <strong>{room}</strong>
 						</p>
 					</div>
+					<div className="controller-score-block">
+						<span>SCORE</span>
+						<strong>{score.toString().padStart(3, "0")}</strong>
+					</div>
 				</section>
+
 				<div className="controller-match-bar">
 					<span>{phase.toUpperCase()}</span>
-					<strong>
-						{phase === "playing"
-							? `${seconds}s`
-							: score.toString().padStart(3, "0")}{" "}
-						{phase === "playing" ? "" : "PTS"}
-					</strong>
+					<strong>{phase === "playing" ? `${seconds}s` : "READY"}</strong>
 				</div>
+
 				{error ? (
 					<div className="controller-error" role="alert">
 						{error}
 					</div>
 				) : null}
-				<section className="aim-card">
-					<div className="aim-scope">
-						<div className="aim-center" />
-						<div
-							className="aim-arrow"
-							style={{ transform: `rotate(${aimDegrees}deg)` }}
-						/>
-						<span className="aim-left">←</span>
-						<span className="aim-right">→</span>
-					</div>
-					<div className="aim-readout">
-						<span>TILT AIM</span>
-						<strong>{tilt.toFixed(2)}</strong>
-					</div>
-				</section>
+
 				<section className="controller-projectile">
 					<div>
-						<span className="panel-label">IN HAND</span>
+						<span className="panel-label">CURRENT</span>
 						<strong>{projectileName(projectile)}</strong>
 					</div>
 					<div>
 						<span className="panel-label">NEXT</span>
 						<strong>{projectileName(nextProjectile)}</strong>
 					</div>
-					<div>
-						<span className="panel-label">THROW</span>
-						<strong>
-							{cooldownMs > 0 ? `${(cooldownMs / 1000).toFixed(1)}s` : "READY"}
-						</strong>
+				</section>
+
+				{tutorialStep !== "complete" ? (
+					<section className={`tutorial-card tutorial-${tutorialStep}`}>
+						<header>
+							<span>HOW TO PLAY</span>
+							<strong>
+								0{tutorial.index} <em>/ 03</em>
+							</strong>
+						</header>
+						<h2>{tutorial.title}</h2>
+						<p>{tutorial.detail}</p>
+						{tutorialStep === "throw" ? <small>Or tap THROW</small> : null}
+					</section>
+				) : null}
+
+				<section className="controller-aim-preview">
+					<div className="aim-preview-scope">
+						<div className="aim-preview-direction">↖ &nbsp; ↑ &nbsp; ↗</div>
+						<div
+							className="aim-preview-line"
+							style={{ transform: `rotate(${aimDegrees}deg)` }}
+						/>
+						<div className="aim-preview-center" />
+					</div>
+					<div className="aim-readout">
+						<span>CURRENT AIM</span>
+						<strong>{aimDegrees}°</strong>
+						<small>{aim.toFixed(2)}</small>
 					</div>
 				</section>
+
+				<div
+					ref={aimSurfaceRef}
+					className={`controller-aim-surface ${isAiming ? "is-dragging" : ""}`}
+					role="slider"
+					tabIndex={0}
+					aria-label="Drag to aim"
+					aria-valuemin={-1}
+					aria-valuemax={1}
+					aria-valuenow={Number(aim.toFixed(2))}
+					onKeyDown={handleAimKeyDown}
+					onPointerDown={handlePointerDown}
+					onPointerMove={handlePointerMove}
+					onPointerUp={handlePointerUp}
+					onPointerCancel={handlePointerCancel}
+				>
+					<span className="aim-surface-label">DRAG TO AIM</span>
+					<span className="aim-surface-limit aim-surface-left">←</span>
+					<span className="aim-surface-limit aim-surface-right">→</span>
+					<span className="aim-surface-track" />
+					<span
+						className="aim-surface-handle"
+						style={{ left: `calc(${aimPosition}% - 10px)` }}
+					>
+						<span />
+					</span>
+				</div>
+
+				<p className="controller-throw-instruction">
+					<strong>FLICK TO THROW</strong>
+					<span>Hold the phone securely and make a short forward motion.</span>
+				</p>
+				<p className="controller-safety-note">
+					Keep a firm grip on your phone and leave space around you.
+				</p>
+
+				<section className="controller-throw">
+					<button
+						className="throw-button"
+						type="button"
+						disabled={!canThrow}
+						onClick={() => sendFlick(0.75, "button")}
+						aria-label={cooldownMs > 0 ? "Throw cooling down" : "Throw"}
+					>
+						<span
+							className="throw-button-progress"
+							style={{ width: `${throwProgress * 100}%` }}
+						/>
+						<strong>THROW</strong>
+						<small>
+							{cooldownMs > 0
+								? `${(cooldownMs / 1000).toFixed(1)}s cooldown`
+								: canThrow
+									? "Tap if motion is unavailable"
+									: "Finish the aim step first"}
+						</small>
+					</button>
+				</section>
+
 				<div
 					className={`confirmation ${confirmation ? "is-visible" : ""}`}
 					aria-live="polite"
 				>
 					{confirmation}
 				</div>
+
 				<div className="controller-actions">
 					<button
 						className="action-button action-primary"
 						type="button"
 						onClick={enableMotion}
 					>
-						<span>◉</span>{" "}
+						<span>◉</span>
 						{permission === "Enabled"
-							? "Motion Controls Enabled"
-							: "Enable Motion Controls"}
+							? "Physical Flick Enabled"
+							: "Enable Physical Flick"}
 					</button>
+					<output
+						className={`motion-status motion-status-${permission.toLowerCase().replaceAll(" ", "-")}`}
+						aria-live="polite"
+					>
+						{permission === "Enabled"
+							? "Physical flick enabled"
+							: permission === "Denied" || permission === "Unsupported"
+								? "Physical flick unavailable — use the Throw button"
+								: "Optional: physical flick adds the signature throw"}
+					</output>
 					<output
 						className={`screen-wake-status screen-wake-${wakeLockStatus}`}
 						aria-live="polite"
@@ -439,61 +722,115 @@ function ControllerPage() {
 						</div>
 					</output>
 					<button
-						className="action-button action-secondary"
-						type="button"
-						onClick={calibrate}
-					>
-						<span>⊙</span> {calibrated ? "Recalibrate" : "Calibrate Phone"}
-					</button>
-					<button
 						className={`action-button ${ready ? "action-ready" : "action-accent"}`}
 						type="button"
 						onClick={toggleReady}
-						disabled={!assignment}
+						disabled={
+							!assignment ||
+							(!ready &&
+								tutorialStep !== "complete" &&
+								tutorialStep !== "ready")
+						}
 					>
-						{ready ? "Ready — tap to leave ready state" : "Mark Me Ready"}
+						{ready
+							? "Ready — tap to leave ready state"
+							: tutorialStep === "ready"
+								? "You’re ready — mark me ready"
+								: tutorialStep !== "complete"
+									? "Finish the quick tutorial"
+									: "Mark Me Ready"}
 					</button>
 				</div>
+
 				<button
 					className="debug-toggle"
 					type="button"
 					onClick={() => setDebugOpen((open) => !open)}
 				>
-					{debugOpen ? "Hide Debug Panel" : "Show Debug Panel"}
+					{debugOpen
+						? "Hide Settings"
+						: import.meta.env.DEV
+							? "Show Debug Panel"
+							: "Settings"}
 				</button>
 				{debugOpen ? (
 					<section className="debug-panel">
-						<DebugRow label="NORMALIZED TILT" value={tilt.toFixed(3)} />
-						<DebugRow
-							label="RAW GAMMA"
-							value={`${latestGammaRef.current.toFixed(1)}°`}
-						/>
-						<DebugRow
-							label="ACCELERATION"
-							value={`${magnitude.toFixed(1)} m/s²`}
-						/>
-						<DebugRow
-							label="FLICK THRESHOLD"
-							value={`${FLICK_DETECTOR_CONFIG.spikeThreshold} m/s²`}
-						/>
-						<DebugRow
-							label="LAST FLICK"
-							value={lastFlick ? `${Math.round(lastFlick * 100)}%` : "—"}
-						/>
-						<DebugRow label="SESSION" value={sessionIdRef.current || "—"} />
-						<DebugRow label="PLAYER ID" value={assignment?.playerId ?? "—"} />
+						{import.meta.env.DEV ? (
+							<>
+								<DebugRow label="NORMALIZED AIM" value={aim.toFixed(3)} />
+								<DebugRow
+									label="AIM MESSAGES/S"
+									value={aimMessagesPerSecond.toString()}
+								/>
+								<DebugRow
+									label="LAST THROW SOURCE"
+									value={lastThrowSource?.toUpperCase() ?? "—"}
+								/>
+								<DebugRow
+									label="MOTION EVENTS"
+									value={motionEventCount.toString()}
+								/>
+								<DebugRow
+									label="ACCELERATION"
+									value={`${magnitude.toFixed(1)} m/s²`}
+								/>
+								<DebugRow
+									label="LAST FLICK"
+									value={lastFlick ? `${Math.round(lastFlick * 100)}%` : "—"}
+								/>
+								<DebugRow
+									label="COOLDOWN"
+									value={cooldownMs ? `${cooldownMs}ms` : "READY"}
+								/>
+								<DebugRow label="SESSION" value={sessionIdRef.current || "—"} />
+								<DebugRow
+									label="PLAYER ID"
+									value={assignment?.playerId ?? "—"}
+								/>
+							</>
+						) : null}
+						<div className="sensitivity-control">
+							<span className="panel-label">FLICK SENSITIVITY</span>
+							<div>
+								{(["low", "normal", "high"] as FlickSensitivity[]).map(
+									(option) => (
+										<button
+											key={option}
+											type="button"
+											className={
+												option === sensitivity
+													? "sensitivity-button is-selected"
+													: "sensitivity-button"
+											}
+											onClick={() => setSensitivity(option)}
+										>
+											{option.toUpperCase()}
+										</button>
+									),
+								)}
+							</div>
+						</div>
 						<button
 							className="debug-test-button"
 							type="button"
-							onClick={() => sendFlick(0.8)}
+							onClick={() => sendFlick(0.75, "button")}
+							disabled={!canThrow}
 						>
-							✦ Test Flick
+							✦ Test Throw
+						</button>
+						<button
+							className="debug-test-button"
+							type="button"
+							onClick={replayTutorial}
+						>
+							Replay Tutorial
 						</button>
 					</section>
 				) : null}
+
 				<p className="controller-footnote">
 					{currentPlayer?.connected
-						? "Tilt to aim. Flick forward to throw."
+						? "Drag to aim. Flick to throw. Tap THROW if motion is unavailable."
 						: "Waiting for the host to reconnect."}
 				</p>
 				{phase === "results" && rank ? (
@@ -513,6 +850,46 @@ function DebugRow({ label, value }: { label: string; value: string }) {
 			<strong>{value}</strong>
 		</div>
 	);
+}
+
+function tutorialCopy(step: TutorialStep) {
+	if (step === "throw")
+		return {
+			index: 2,
+			title: "Flick to throw",
+			detail:
+				"Hold the phone securely and make a short forward throwing motion.",
+		};
+	if (step === "ready")
+		return {
+			index: 3,
+			title: "You’re ready to play",
+			detail: "Tap Mark Me Ready when your aim and throw feel comfortable.",
+		};
+	return {
+		index: 1,
+		title: "Drag to aim",
+		detail: "Drag the marker left and right through a meaningful range.",
+	};
+}
+
+function readTutorialComplete() {
+	if (typeof window === "undefined") return false;
+	try {
+		return window.localStorage.getItem(TUTORIAL_STORAGE_KEY) === "true";
+	} catch {
+		return false;
+	}
+}
+
+function writeTutorialComplete(complete: boolean) {
+	if (typeof window === "undefined") return;
+	try {
+		if (complete) window.localStorage.setItem(TUTORIAL_STORAGE_KEY, "true");
+		else window.localStorage.removeItem(TUTORIAL_STORAGE_KEY);
+	} catch {
+		/* Private browsing can disable localStorage without disabling gameplay. */
+	}
 }
 
 function vibrate(...pattern: number[]) {
@@ -545,13 +922,15 @@ function screenWakeLockCopy(status: ScreenWakeLockStatus) {
 	if (status === "unsupported") {
 		return {
 			label: "SCREEN WAKE UNAVAILABLE",
-			detail: "Keep the phone awake manually for the round.",
+			detail:
+				"Disable auto-lock manually or keep the phone awake for the round.",
 		};
 	}
 	if (status === "denied") {
 		return {
 			label: "SCREEN WAKE BLOCKED",
-			detail: "Keep the phone awake manually for the round.",
+			detail:
+				"Disable auto-lock manually or keep the phone awake for the round.",
 		};
 	}
 	if (status === "released") {
@@ -562,6 +941,6 @@ function screenWakeLockCopy(status: ScreenWakeLockStatus) {
 	}
 	return {
 		label: "SCREEN WAKE LOCK",
-		detail: "Enabled automatically when motion controls start.",
+		detail: "Enabled automatically when physical flick controls start.",
 	};
 }

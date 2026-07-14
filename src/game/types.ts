@@ -11,7 +11,7 @@ export type PlayerAssignment = {
 
 export type LobbyPlayer = PlayerAssignment & {
 	ready: boolean;
-	calibrated: boolean;
+	motionEnabled: boolean;
 	connected: boolean;
 };
 

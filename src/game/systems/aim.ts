@@ -4,17 +4,18 @@ export type AimConfig = {
 	minAngle: number;
 	maxAngle: number;
 	defaultAngle: number;
+	invertInput?: boolean;
 };
 
-export function mapAimAngle(normalizedX: number, config: AimConfig) {
+export function mapAimAngle(normalizedAim: number, config: AimConfig) {
 	const normalized = clamp(
-		Number.isFinite(normalizedX) ? normalizedX : 0,
+		Number.isFinite(normalizedAim) ? normalizedAim : 0,
 		-1,
 		1,
 	);
+	const directed = config.invertInput ? -normalized : normalized;
 	return (
-		config.minAngle +
-		((normalized + 1) / 2) * (config.maxAngle - config.minAngle)
+		config.minAngle + ((directed + 1) / 2) * (config.maxAngle - config.minAngle)
 	);
 }
 
