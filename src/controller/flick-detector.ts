@@ -1,4 +1,4 @@
-import { clamp } from '../game/physics'
+import { clamp } from '../game/systems/math'
 
 export const FLICK_DETECTOR_CONFIG = {
   spikeThreshold: 13,

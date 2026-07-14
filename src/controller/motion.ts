@@ -1,4 +1,4 @@
-import { clamp } from '../game/physics'
+import { clamp } from '../game/systems/math'
 
 export function normalizeOrientation(gamma: number, baselineGamma: number) {
   return clamp((gamma - baselineGamma) / 38, -1, 1)

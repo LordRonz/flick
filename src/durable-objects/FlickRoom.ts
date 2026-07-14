@@ -1,108 +1,370 @@
-import { DurableObject } from 'cloudflare:workers'
-import type { FlickEnv } from '../cloudflare-env'
+import { DurableObject } from "cloudflare:workers";
+import type { FlickEnv } from "../cloudflare-env";
+import type {
+	LobbyPlayer,
+	PlayerAssignment,
+	PlayerNumber,
+} from "../game/types";
 import {
-  ControllerMessageSchema,
-  HostMessageSchema,
-  MAX_MESSAGE_BYTES,
-  parseJsonMessage,
-  type HostMessage,
-} from '../realtime/protocol'
+	colorForPlayerNumber,
+	findFirstFreePlayerNumber,
+} from "../realtime/player-slots";
+import {
+	ControllerMessageSchema,
+	type HostToRoomMessage,
+	HostToRoomMessageSchema,
+	MAX_MESSAGE_BYTES,
+	parseJsonMessage,
+	type RoomToHostMessage,
+} from "../realtime/protocol";
+
+const MAX_CONTROLLERS = 4;
+const RECONNECT_GRACE_MS = 15_000;
+const CLOSE_HOST_LEFT = 4001;
 
 type ConnectionAttachment = {
-  role: 'host' | 'controller'
-  connectedAt: number
-}
+	role: "host" | "controller";
+	connectedAt: number;
+	sessionId?: string;
+	player?: PlayerAssignment;
+};
 
-const CLOSE_HOST_LEFT = 4001
+type StoredPlayerSession = {
+	player: PlayerAssignment;
+	ready: boolean;
+	calibrated: boolean;
+	disconnectedAt?: number;
+};
 
 export class FlickRoom extends DurableObject {
-  private readonly state: DurableObjectState
+	private readonly state: DurableObjectState;
 
-  constructor(ctx: DurableObjectState, env: FlickEnv) {
-    super(ctx, env)
-    this.state = ctx
-  }
+	constructor(ctx: DurableObjectState, _env: FlickEnv) {
+		super(ctx, _env);
+		this.state = ctx;
+	}
 
-  async fetch(request: Request) {
-    const url = new URL(request.url)
-    if (url.pathname === '/__init' && request.method === 'POST') return this.initialize()
-    if (!await this.state.storage.get<boolean>('initialized')) return new Response('Room does not exist.', { status: 404 })
-    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') return new Response('WebSocket upgrade required.', { status: 426 })
-    const role = url.searchParams.get('role')
-    if (role !== 'host' && role !== 'controller') return new Response('Role must be host or controller.', { status: 400 })
-    if (role === 'controller' && !this.socketFor('host')) return new Response('Host is not connected.', { status: 409 })
-    if (this.socketFor(role)) return new Response(`${role} is already connected.`, { status: 409 })
+	async fetch(request: Request) {
+		const url = new URL(request.url);
+		if (url.pathname === "/__init" && request.method === "POST")
+			return this.initialize();
+		if (!(await this.state.storage.get<boolean>("initialized")))
+			return new Response("Room does not exist.", { status: 404 });
+		if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket")
+			return new Response("WebSocket upgrade required.", { status: 426 });
 
-    const pair = new WebSocketPair()
-    const clientSocket = pair[0]
-    const serverSocket = pair[1]
-    this.state.acceptWebSocket(serverSocket)
-    serverSocket.serializeAttachment({ role, connectedAt: Date.now() } satisfies ConnectionAttachment)
+		const role = url.searchParams.get("role");
+		if (role !== "host" && role !== "controller")
+			return new Response("Role must be host or controller.", { status: 400 });
+		if (role === "host" && this.socketFor("host"))
+			return new Response("host is already connected.", { status: 409 });
+		if (role === "controller" && !this.socketFor("host"))
+			return new Response("Host is not connected.", { status: 409 });
 
-    this.send(serverSocket, { type: 'ready' })
-    if (role === 'controller') {
-      const host = this.socketFor('host')
-      if (host) this.send(host, { type: 'ready' })
-    }
-    return new Response(null, { status: 101, webSocket: clientSocket })
-  }
+		const pair = new WebSocketPair();
+		const clientSocket = pair[0];
+		const serverSocket = pair[1];
+		let attachment: ConnectionAttachment = { role, connectedAt: Date.now() };
 
-  webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
-    const raw = typeof message === 'string' ? message : new TextDecoder().decode(message)
-    if (new TextEncoder().encode(raw).byteLength > MAX_MESSAGE_BYTES) {
-      this.send(socket, { type: 'error', message: 'Message too large.' })
-      return
-    }
-    const attachment = this.attachment(socket)
-    if (!attachment) return
-    if (attachment.role === 'controller') {
-      const parsed = parseJsonMessage(raw, ControllerMessageSchema)
-      if (!parsed) {
-        this.send(socket, { type: 'error', message: 'Invalid controller message.' })
-        return
-      }
-      const host = this.socketFor('host')
-      if (host) this.send(host, parsed)
-      return
-    }
-    const parsed = parseJsonMessage(raw, HostMessageSchema)
-    if (!parsed) {
-      this.send(socket, { type: 'error', message: 'Invalid host message.' })
-      return
-    }
-    const controller = this.socketFor('controller')
-    if (controller) this.send(controller, parsed)
-  }
+		if (role === "controller") {
+			const sessionId = this.sessionId(url.searchParams.get("sessionId"));
+			if (this.socketFor("controller", sessionId))
+				return new Response("Controller session is already connected.", {
+					status: 409,
+				});
+			const assignment = await this.assignmentForSession(sessionId);
+			if (!assignment)
+				return new Response("Four controllers are already connected.", {
+					status: 409,
+				});
+			attachment = { ...attachment, sessionId, player: assignment.player };
+			await this.state.storage.put(this.sessionKey(sessionId), {
+				...assignment,
+				disconnectedAt: undefined,
+			});
+		}
 
-  webSocketClose(socket: WebSocket) {
-    const attachment = this.attachment(socket)
-    if (attachment?.role === 'host') this.socketFor('controller')?.close(CLOSE_HOST_LEFT, 'Host disconnected.')
-    if (attachment?.role === 'controller') this.send(this.socketFor('host'), { type: 'error', message: 'Controller disconnected.' })
-  }
+		this.state.acceptWebSocket(serverSocket);
+		serverSocket.serializeAttachment(attachment);
 
-  webSocketError(socket: WebSocket) {
-    this.webSocketClose(socket)
-  }
+		if (role === "host") {
+			await this.sendLobbyState(serverSocket);
+		} else if (attachment.player) {
+			this.send(serverSocket, {
+				type: "assignment",
+				player: attachment.player,
+			});
+			this.send(this.socketFor("host"), {
+				type: "player-connected",
+				player: attachment.player,
+			});
+			await this.sendLobbyState(this.socketFor("host"));
+			await this.sendLobbyState(serverSocket);
+		}
 
-  private async initialize() {
-    if (await this.state.storage.get<boolean>('initialized')) return new Response('Room already initialized.', { status: 409 })
-    await this.state.storage.put('initialized', true)
-    return new Response(null, { status: 201 })
-  }
+		return new Response(null, { status: 101, webSocket: clientSocket });
+	}
 
-  private socketFor(role: ConnectionAttachment['role']) {
-    return this.state.getWebSockets().find((socket: WebSocket) => this.attachment(socket)?.role === role)
-  }
+	webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
+		const raw =
+			typeof message === "string" ? message : new TextDecoder().decode(message);
+		if (new TextEncoder().encode(raw).byteLength > MAX_MESSAGE_BYTES) {
+			this.send(socket, { type: "error", message: "Message too large." });
+			return;
+		}
+		const attachment = this.attachment(socket);
+		if (!attachment) return;
 
-  private attachment(socket: WebSocket) {
-    const value = socket.deserializeAttachment()
-    if (!value || typeof value !== 'object' || !('role' in value) || !('connectedAt' in value)) return null
-    if ((value.role !== 'host' && value.role !== 'controller') || typeof value.connectedAt !== 'number') return null
-    return value as ConnectionAttachment
-  }
+		if (attachment.role === "controller") {
+			const parsed = parseJsonMessage(raw, ControllerMessageSchema);
+			if (!parsed || !attachment.player || !attachment.sessionId) {
+				this.send(socket, {
+					type: "error",
+					message: "Invalid controller message.",
+				});
+				return;
+			}
+			void this.persistControllerState(attachment.sessionId, parsed);
+			const hostMessage: RoomToHostMessage = {
+				type: "controller-input",
+				playerId: attachment.player.playerId,
+				input: parsed,
+			};
+			this.send(this.socketFor("host"), hostMessage);
+			return;
+		}
 
-  private send(socket: WebSocket | undefined, message: HostMessage | Record<string, unknown>) {
-    if (!socket || socket.readyState !== WebSocket.OPEN) return
-    socket.send(JSON.stringify(message))
-  }
+		const parsed = parseJsonMessage(raw, HostToRoomMessageSchema);
+		if (!parsed) {
+			this.send(socket, { type: "error", message: "Invalid host message." });
+			return;
+		}
+		this.relayToControllers(parsed);
+	}
+
+	webSocketClose(socket: WebSocket) {
+		const attachment = this.attachment(socket);
+		if (attachment?.role === "host") {
+			for (const controller of this.controllerSockets())
+				controller.close(CLOSE_HOST_LEFT, "Host disconnected.");
+			return;
+		}
+		if (
+			attachment?.role === "controller" &&
+			attachment.player &&
+			attachment.sessionId
+		) {
+			void this.persistDisconnect(
+				attachment.sessionId,
+				attachment.player.playerId,
+			);
+		}
+	}
+
+	webSocketError(socket: WebSocket) {
+		this.webSocketClose(socket);
+	}
+
+	private async initialize() {
+		if (await this.state.storage.get<boolean>("initialized"))
+			return new Response("Room already initialized.", { status: 409 });
+		await this.state.storage.put("initialized", true);
+		return new Response(null, { status: 201 });
+	}
+
+	private sessionId(candidate: string | null) {
+		return candidate && /^[0-9a-f-]{36}$/i.test(candidate)
+			? candidate
+			: crypto.randomUUID();
+	}
+
+	private async assignmentForSession(sessionId: string) {
+		const existing = await this.state.storage.get<StoredPlayerSession>(
+			this.sessionKey(sessionId),
+		);
+		const now = Date.now();
+		if (
+			existing &&
+			(!existing.disconnectedAt ||
+				now - existing.disconnectedAt <= RECONNECT_GRACE_MS)
+		)
+			return existing;
+		if (existing) await this.state.storage.delete(this.sessionKey(sessionId));
+
+		const occupiedNumbers = new Set<PlayerNumber>();
+		for (const socket of this.controllerSockets()) {
+			const player = this.attachment(socket)?.player;
+			if (player) occupiedNumbers.add(player.playerNumber);
+		}
+		const sessions = await this.state.storage.list<StoredPlayerSession>({
+			prefix: "player-session:",
+		});
+		for (const [key, record] of sessions) {
+			if (
+				record.disconnectedAt &&
+				now - record.disconnectedAt > RECONNECT_GRACE_MS
+			) {
+				await this.state.storage.delete(key);
+				continue;
+			}
+			if (!record.disconnectedAt)
+				occupiedNumbers.add(record.player.playerNumber);
+			if (
+				record.disconnectedAt &&
+				now - record.disconnectedAt <= RECONNECT_GRACE_MS
+			)
+				occupiedNumbers.add(record.player.playerNumber);
+		}
+
+		const playerNumber = findFirstFreePlayerNumber(occupiedNumbers);
+		if (!playerNumber || this.controllerSockets().length >= MAX_CONTROLLERS)
+			return null;
+		const player: PlayerAssignment = {
+			playerId: crypto.randomUUID(),
+			playerNumber,
+			color: colorForPlayerNumber(playerNumber),
+		};
+		return {
+			player,
+			ready: false,
+			calibrated: false,
+		} satisfies StoredPlayerSession;
+	}
+
+	private async persistControllerState(
+		sessionId: string,
+		input: { type: string; ready?: boolean; calibrated?: boolean },
+	) {
+		const key = this.sessionKey(sessionId);
+		const current = await this.state.storage.get<StoredPlayerSession>(key);
+		if (!current) return;
+		if (input.type === "ready" && typeof input.ready === "boolean")
+			current.ready = input.ready;
+		if (
+			input.type === "calibration-status" &&
+			typeof input.calibrated === "boolean"
+		)
+			current.calibrated = input.calibrated;
+		await this.state.storage.put(key, current);
+		await this.sendLobbyState(this.socketFor("host"));
+		await this.sendLobbyState(this.socketFor("controller", sessionId));
+	}
+
+	private async persistDisconnect(sessionId: string, playerId: string) {
+		const key = this.sessionKey(sessionId);
+		const current = await this.state.storage.get<StoredPlayerSession>(key);
+		if (current)
+			await this.state.storage.put(key, {
+				...current,
+				disconnectedAt: Date.now(),
+			});
+		this.send(this.socketFor("host"), {
+			type: "player-disconnected",
+			playerId,
+		});
+		await this.sendLobbyState(this.socketFor("host"));
+	}
+
+	private async sendLobbyState(socket: WebSocket | undefined) {
+		if (!socket) return;
+		const now = Date.now();
+		const connected = new Map<string, PlayerAssignment>();
+		for (const controller of this.controllerSockets()) {
+			const player = this.attachment(controller)?.player;
+			if (player) connected.set(player.playerId, player);
+		}
+		const players: LobbyPlayer[] = [];
+		const sessions = await this.state.storage.list<StoredPlayerSession>({
+			prefix: "player-session:",
+		});
+		for (const [key, record] of sessions) {
+			if (
+				record.disconnectedAt &&
+				now - record.disconnectedAt > RECONNECT_GRACE_MS
+			) {
+				await this.state.storage.delete(key);
+				continue;
+			}
+			players.push({
+				...record.player,
+				ready: record.ready,
+				calibrated: record.calibrated,
+				connected: connected.has(record.player.playerId),
+			});
+		}
+		players.sort((a, b) => a.playerNumber - b.playerNumber);
+		this.send(socket, {
+			type: "lobby-state",
+			players: players.slice(0, MAX_CONTROLLERS),
+		});
+	}
+
+	private relayToControllers(message: HostToRoomMessage) {
+		const targetPlayerIds = new Set<string>();
+		if (
+			message.type === "flick-accepted" ||
+			message.type === "score-update" ||
+			message.type === "prop-destroyed"
+		)
+			targetPlayerIds.add(message.playerId);
+		if (message.type === "hit-confirmed")
+			targetPlayerIds.add(message.attackerPlayerId);
+		if (message.type === "player-hit")
+			targetPlayerIds.add(message.targetPlayerId);
+		for (const controller of this.controllerSockets()) {
+			const playerId = this.attachment(controller)?.player?.playerId;
+			if (
+				targetPlayerIds.size === 0 ||
+				(playerId && targetPlayerIds.has(playerId))
+			)
+				this.send(controller, message);
+		}
+	}
+
+	private sessionKey(sessionId: string) {
+		return `player-session:${sessionId}`;
+	}
+
+	private controllerSockets() {
+		return this.state
+			.getWebSockets()
+			.filter(
+				(socket: WebSocket) => this.attachment(socket)?.role === "controller",
+			);
+	}
+
+	private socketFor(role: ConnectionAttachment["role"], sessionId?: string) {
+		return this.state.getWebSockets().find((socket: WebSocket) => {
+			const attachment = this.attachment(socket);
+			return (
+				attachment?.role === role &&
+				(!sessionId || attachment.sessionId === sessionId)
+			);
+		});
+	}
+
+	private attachment(socket: WebSocket) {
+		const value = socket.deserializeAttachment();
+		if (
+			!value ||
+			typeof value !== "object" ||
+			!("role" in value) ||
+			!("connectedAt" in value)
+		)
+			return null;
+		if (
+			(value.role !== "host" && value.role !== "controller") ||
+			typeof value.connectedAt !== "number"
+		)
+			return null;
+		return value as ConnectionAttachment;
+	}
+
+	private send(
+		socket: WebSocket | undefined,
+		message: HostToRoomMessage | RoomToHostMessage | Record<string, unknown>,
+	) {
+		if (!socket || socket.readyState !== WebSocket.OPEN) return;
+		socket.send(JSON.stringify(message));
+	}
 }
