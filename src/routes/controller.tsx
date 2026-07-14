@@ -6,6 +6,10 @@ import {
 	FLICK_DETECTOR_CONFIG,
 } from "../controller/flick-detector";
 import { normalizeOrientation, smoothValue } from "../controller/motion";
+import {
+	createScreenWakeLock,
+	type ScreenWakeLockStatus,
+} from "../controller/screen-wake-lock";
 import { nextProjectileType } from "../game/config/projectiles";
 import type {
 	LobbyPlayer,
@@ -61,6 +65,11 @@ function ControllerPage() {
 	const [calibrated, setCalibrated] = useState(false);
 	const [debugOpen, setDebugOpen] = useState(false);
 	const [error, setError] = useState("");
+	const [wakeLockStatus, setWakeLockStatus] =
+		useState<ScreenWakeLockStatus>("idle");
+	const wakeLockRef = useRef<ReturnType<typeof createScreenWakeLock> | null>(
+		null,
+	);
 
 	useEffect(() => {
 		if (cooldownMs <= 0) return;
@@ -70,6 +79,15 @@ function ControllerPage() {
 		);
 		return () => window.clearInterval(interval);
 	}, [cooldownMs]);
+
+	useEffect(() => {
+		const controller = createScreenWakeLock(setWakeLockStatus);
+		wakeLockRef.current = controller;
+		return () => {
+			wakeLockRef.current = null;
+			void controller.destroy();
+		};
+	}, []);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Sensor handlers use refs and the socket lifecycle is keyed by room.
 	useEffect(() => {
@@ -255,6 +273,9 @@ function ControllerPage() {
 				sensorsEnabledRef.current = true;
 			}
 			setPermission("Enabled");
+			if ((await wakeLockRef.current?.request()) === "active") {
+				showConfirmation("SCREEN AWAKE");
+			}
 		} catch {
 			setPermission("Denied");
 			setError(
@@ -309,6 +330,7 @@ function ControllerPage() {
 		);
 
 	const color = assignment?.color ?? "blue";
+	const wakeLockCopy = screenWakeLockCopy(wakeLockStatus);
 	const currentPlayer = players.find(
 		(player) => player.playerId === assignment?.playerId,
 	);
@@ -406,6 +428,16 @@ function ControllerPage() {
 							? "Motion Controls Enabled"
 							: "Enable Motion Controls"}
 					</button>
+					<output
+						className={`screen-wake-status screen-wake-${wakeLockStatus}`}
+						aria-live="polite"
+					>
+						<span className="screen-wake-indicator" />
+						<div>
+							<strong>{wakeLockCopy.label}</strong>
+							<p>{wakeLockCopy.detail}</p>
+						</div>
+					</output>
 					<button
 						className="action-button action-secondary"
 						type="button"
@@ -501,4 +533,35 @@ function projectileName(type: ProjectileType) {
 	if (type === "paper-ball") return "PAPER BALL";
 	if (type === "coffee-mug") return "COFFEE MUG";
 	return "STAPLER";
+}
+
+function screenWakeLockCopy(status: ScreenWakeLockStatus) {
+	if (status === "active") {
+		return {
+			label: "SCREEN AWAKE",
+			detail: "Auto-lock is paused while this controller is visible.",
+		};
+	}
+	if (status === "unsupported") {
+		return {
+			label: "SCREEN WAKE UNAVAILABLE",
+			detail: "Keep the phone awake manually for the round.",
+		};
+	}
+	if (status === "denied") {
+		return {
+			label: "SCREEN WAKE BLOCKED",
+			detail: "Keep the phone awake manually for the round.",
+		};
+	}
+	if (status === "released") {
+		return {
+			label: "SCREEN WAKE RELEASED",
+			detail: "Return to this page to try again if the screen starts sleeping.",
+		};
+	}
+	return {
+		label: "SCREEN WAKE LOCK",
+		detail: "Enabled automatically when motion controls start.",
+	};
 }
