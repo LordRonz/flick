@@ -23,6 +23,7 @@ import {
 	createScreenWakeLock,
 	type ScreenWakeLockStatus,
 } from "../controller/screen-wake-lock";
+import { playUiCue } from "../game/audio/ArcadeAudio";
 import { STATIONS } from "../game/config/arena";
 import { type FlickSource, THROW_COOLDOWN_MS } from "../game/config/controls";
 import { nextProjectileType } from "../game/config/projectiles";
@@ -104,9 +105,7 @@ function ControllerPage() {
 	const [cooldownMs, setCooldownMs] = useState(0);
 	const [confirmation, setConfirmation] = useState("");
 	const [ready, setReady] = useState(false);
-	const [tutorialStep, setTutorialStep] = useState<TutorialStep>(() =>
-		readTutorialComplete() ? "complete" : "aim",
-	);
+	const [tutorialStep, setTutorialStep] = useState<TutorialStep>("aim");
 	const [sensitivity, setSensitivity] = useState<FlickSensitivity>("normal");
 	const [debugOpen, setDebugOpen] = useState(false);
 	const [error, setError] = useState("");
@@ -119,6 +118,17 @@ function ControllerPage() {
 	phaseRef.current = phase;
 	tutorialStepRef.current = tutorialStep;
 	sensitivityRef.current = sensitivity;
+
+	useEffect(() => {
+		const nextStep = readTutorialComplete() ? "complete" : "aim";
+		tutorialStepRef.current = nextStep;
+		setTutorialStep(nextStep);
+	}, []);
+
+	useEffect(() => {
+		if (!error) return;
+		playUiCue(/room.+full|full.+room/i.test(error) ? "room-full" : "ui-error");
+	}, [error]);
 
 	useEffect(() => {
 		if (cooldownMs <= 0) return;
@@ -539,7 +549,7 @@ function ControllerPage() {
 	const wakeLockCopy = screenWakeLockCopy(wakeLockStatus);
 
 	return (
-		<main className={`controller-shell color-${color}`}>
+		<main className={`controller-shell color-${color} phase-${phase}`}>
 			<div className="controller-card">
 				<header className="controller-header">
 					<Link to="/" className="brand-mark">
@@ -575,7 +585,17 @@ function ControllerPage() {
 
 				<div className="controller-match-bar">
 					<span>{phase.toUpperCase()}</span>
-					<strong>{phase === "playing" ? `${seconds}s` : "READY"}</strong>
+					<strong>
+						{phase === "playing"
+							? `${seconds}s`
+							: phase === "countdown"
+								? "GET SET"
+								: phase === "results"
+									? "FINISHED"
+									: ready
+										? "YOU’RE READY"
+										: "NOT READY"}
+					</strong>
 				</div>
 
 				{error ? (
@@ -585,14 +605,8 @@ function ControllerPage() {
 				) : null}
 
 				<section className="controller-projectile">
-					<div>
-						<span className="panel-label">CURRENT</span>
-						<strong>{projectileName(projectile)}</strong>
-					</div>
-					<div>
-						<span className="panel-label">NEXT</span>
-						<strong>{projectileName(nextProjectile)}</strong>
-					</div>
+					<ProjectileReadout label="CURRENT" type={projectile} />
+					<ProjectileReadout label="NEXT" type={nextProjectile} />
 				</section>
 
 				{tutorialStep !== "complete" ? (
@@ -609,22 +623,6 @@ function ControllerPage() {
 					</section>
 				) : null}
 
-				<section className="controller-aim-preview">
-					<div className="aim-preview-scope">
-						<div className="aim-preview-direction">↖ &nbsp; ↑ &nbsp; ↗</div>
-						<div
-							className="aim-preview-line"
-							style={{ transform: `rotate(${aimDegrees}deg)` }}
-						/>
-						<div className="aim-preview-center" />
-					</div>
-					<div className="aim-readout">
-						<span>CURRENT AIM</span>
-						<strong>{aimDegrees}°</strong>
-						<small>{aim.toFixed(2)}</small>
-					</div>
-				</section>
-
 				<div
 					ref={aimSurfaceRef}
 					className={`controller-aim-surface ${isAiming ? "is-dragging" : ""}`}
@@ -640,7 +638,10 @@ function ControllerPage() {
 					onPointerUp={handlePointerUp}
 					onPointerCancel={handlePointerCancel}
 				>
-					<span className="aim-surface-label">DRAG TO AIM</span>
+					<span className="aim-surface-label">
+						<strong>DRAG TO AIM</strong>
+						<small>{aimDegrees}°</small>
+					</span>
 					<span className="aim-surface-limit aim-surface-left">←</span>
 					<span className="aim-surface-limit aim-surface-right">→</span>
 					<span className="aim-surface-track" />
@@ -656,9 +657,11 @@ function ControllerPage() {
 					<strong>FLICK TO THROW</strong>
 					<span>Hold the phone securely and make a short forward motion.</span>
 				</p>
-				<p className="controller-safety-note">
-					Keep a firm grip on your phone and leave space around you.
-				</p>
+				{phase === "lobby" ? (
+					<p className="controller-safety-note">
+						Keep a firm grip and leave space around you.
+					</p>
+				) : null}
 
 				<section className="controller-throw">
 					<button
@@ -678,7 +681,11 @@ function ControllerPage() {
 								? `${(cooldownMs / 1000).toFixed(1)}s cooldown`
 								: canThrow
 									? "Tap if motion is unavailable"
-									: "Finish the aim step first"}
+									: tutorialStep === "aim"
+										? "Finish the aim step first"
+										: phase === "lobby"
+											? "Waiting for the host to start"
+											: "Throw unavailable"}
 						</small>
 					</button>
 				</section>
@@ -690,57 +697,59 @@ function ControllerPage() {
 					{confirmation}
 				</div>
 
-				<div className="controller-actions">
-					<button
-						className="action-button action-primary"
-						type="button"
-						onClick={enableMotion}
-					>
-						<span>◉</span>
-						{permission === "Enabled"
-							? "Physical Flick Enabled"
-							: "Enable Physical Flick"}
-					</button>
-					<output
-						className={`motion-status motion-status-${permission.toLowerCase().replaceAll(" ", "-")}`}
-						aria-live="polite"
-					>
-						{permission === "Enabled"
-							? "Physical flick enabled"
-							: permission === "Denied" || permission === "Unsupported"
-								? "Physical flick unavailable — use the Throw button"
-								: "Optional: physical flick adds the signature throw"}
-					</output>
-					<output
-						className={`screen-wake-status screen-wake-${wakeLockStatus}`}
-						aria-live="polite"
-					>
-						<span className="screen-wake-indicator" />
-						<div>
-							<strong>{wakeLockCopy.label}</strong>
-							<p>{wakeLockCopy.detail}</p>
-						</div>
-					</output>
-					<button
-						className={`action-button ${ready ? "action-ready" : "action-accent"}`}
-						type="button"
-						onClick={toggleReady}
-						disabled={
-							!assignment ||
-							(!ready &&
-								tutorialStep !== "complete" &&
-								tutorialStep !== "ready")
-						}
-					>
-						{ready
-							? "Ready — tap to leave ready state"
-							: tutorialStep === "ready"
-								? "You’re ready — mark me ready"
-								: tutorialStep !== "complete"
-									? "Finish the quick tutorial"
-									: "Mark Me Ready"}
-					</button>
-				</div>
+				{phase === "lobby" ? (
+					<div className="controller-actions">
+						<button
+							className="action-button action-primary"
+							type="button"
+							onClick={enableMotion}
+						>
+							<span>◉</span>
+							{permission === "Enabled"
+								? "Physical Flick Enabled"
+								: "Enable Physical Flick"}
+						</button>
+						<output
+							className={`motion-status motion-status-${permission.toLowerCase().replaceAll(" ", "-")}`}
+							aria-live="polite"
+						>
+							{permission === "Enabled"
+								? "Physical flick enabled"
+								: permission === "Denied" || permission === "Unsupported"
+									? "Physical flick unavailable — use the Throw button"
+									: "Optional: physical flick adds the signature throw"}
+						</output>
+						<output
+							className={`screen-wake-status screen-wake-${wakeLockStatus}`}
+							aria-live="polite"
+						>
+							<span className="screen-wake-indicator" />
+							<div>
+								<strong>{wakeLockCopy.label}</strong>
+								<p>{wakeLockCopy.detail}</p>
+							</div>
+						</output>
+						<button
+							className={`action-button ${ready ? "action-ready" : "action-accent"}`}
+							type="button"
+							onClick={toggleReady}
+							disabled={
+								!assignment ||
+								(!ready &&
+									tutorialStep !== "complete" &&
+									tutorialStep !== "ready")
+							}
+						>
+							{ready
+								? "Ready — tap to leave ready state"
+								: tutorialStep === "ready"
+									? "You’re ready — mark me ready"
+									: tutorialStep !== "complete"
+										? "Finish the quick tutorial"
+										: "Mark Me Ready"}
+						</button>
+					</div>
+				) : null}
 
 				<button
 					className="debug-toggle"
@@ -840,6 +849,27 @@ function ControllerPage() {
 				) : null}
 			</div>
 		</main>
+	);
+}
+
+function ProjectileReadout({
+	label,
+	type,
+}: {
+	label: string;
+	type: ProjectileType;
+}) {
+	return (
+		<div className="projectile-readout">
+			<span
+				className={`projectile-icon projectile-${type}`}
+				aria-hidden="true"
+			/>
+			<span>
+				<small className="panel-label">{label}</small>
+				<strong>{projectileName(type)}</strong>
+			</span>
+		</div>
 	);
 }
 

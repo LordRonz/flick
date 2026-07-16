@@ -1,3 +1,4 @@
+import type { AudioLevels } from "../audio/ArcadeAudio";
 import type { FlickSource } from "../config/controls";
 import type {
 	MatchPhase,
@@ -21,6 +22,8 @@ export type ReactToGameEvent =
 			source: FlickSource;
 	  }
 	| { type: "start-match" }
+	| { type: "set-muted"; muted: boolean }
+	| { type: "set-audio-levels"; levels: AudioLevels }
 	| { type: "reset-match" };
 
 export type GameToReactEvent =

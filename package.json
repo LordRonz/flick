@@ -17,6 +17,7 @@
     "format": "biome format",
     "lint": "biome lint",
     "check": "biome check"
+	,"generate:sfx": "node scripts/generate-sfx.mjs"
   },
   "dependencies": {
     "@t3-oss/env-core": "^0.13.10",

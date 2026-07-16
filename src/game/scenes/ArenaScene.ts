@@ -1,4 +1,6 @@
 import Phaser from "phaser";
+import { ARCADE_COLORS, ARCADE_MOTION, PLAYER_HEX } from "../art/tokens";
+import { ArcadeAudio, type ArcadeSoundCue } from "../audio/ArcadeAudio";
 import type { GameBridge } from "../bridge/GameBridge";
 import type { ReactToGameEvent } from "../bridge/game-events";
 import {
@@ -14,6 +16,7 @@ import {
 	PROJECTILE_DEFINITIONS,
 } from "../config/projectiles";
 import { PROP_DEFINITIONS, PROP_LAYOUT } from "../config/props";
+import { ArcadeEffects } from "../effects/ArcadeEffects";
 import { mapAimAngle, mapThrowSpeed, smoothAim } from "../systems/aim";
 import { clamp } from "../systems/math";
 import { canScoreAgainst, hitScore, propScore } from "../systems/scoring";
@@ -33,20 +36,24 @@ const COLLISION_CATEGORY = {
 	SENSOR: 0x0010,
 } as const;
 
-const PLAYER_HEX = {
-	blue: 0x44d8e4,
-	red: 0xff665a,
-	green: 0x74e6b2,
-	yellow: 0xffd166,
-} as const;
+const PROJECTILE_AUDIO: Record<
+	ProjectileType,
+	{ throw: ArcadeSoundCue; impact: ArcadeSoundCue }
+> = {
+	"paper-ball": { throw: "paper-throw", impact: "light-impact" },
+	"coffee-mug": { throw: "mug-throw", impact: "medium-impact" },
+	stapler: { throw: "stapler-throw", impact: "heavy-impact" },
+};
 
 type ProjectileMetadata = {
 	projectileId: string;
 	ownerPlayerId: string;
 	projectileType: ProjectileType;
+	practice: boolean;
 	createdAt: number;
 	scoredPlayerIds: Set<string>;
 	destroyedPropIds: Set<string>;
+	lastWorldImpactAt: number;
 };
 
 type ProjectileState = {
@@ -87,12 +94,14 @@ export class ArenaScene extends Phaser.Scene {
 	private readonly players = new Map<string, PlayerState>();
 	private readonly projectiles = new Map<string, ProjectileState>();
 	private readonly props = new Map<string, PropState>();
+	private readonly audio = new ArcadeAudio();
 	private phase: MatchPhase = "lobby";
+	private reducedMotion = false;
 	private matchEndsAt = 0;
 	private lastTimerSecond = -1;
 	private countdownEvent?: Phaser.Time.TimerEvent;
 	private countdownText?: Phaser.GameObjects.Text;
-	private particles?: Phaser.GameObjects.Particles.ParticleEmitter;
+	private effects?: ArcadeEffects;
 	private performanceText?: Phaser.GameObjects.Text;
 	private lastPerformanceUpdate = 0;
 	private removeBridgeListener?: () => void;
@@ -104,17 +113,12 @@ export class ArenaScene extends Phaser.Scene {
 	}
 
 	create() {
+		this.reducedMotion =
+			window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+		this.audio.preloadSoundtrack();
+		this.effects = new ArcadeEffects(this, this.reducedMotion);
 		this.buildArena();
 		this.buildProps();
-		this.particles = this.add.particles(0, 0, "particle", {
-			lifespan: 480,
-			speed: { min: 80, max: 230 },
-			angle: { min: 0, max: 360 },
-			scale: { start: 1.1, end: 0 },
-			quantity: 8,
-			emitting: false,
-			maxParticles: 80,
-		});
 		if (import.meta.env.DEV) {
 			this.performanceText = this.add
 				.text(GAME_WIDTH - 24, 26, "", {
@@ -136,7 +140,10 @@ export class ArenaScene extends Phaser.Scene {
 	}
 
 	update() {
-		if (this.phase === "playing") this.updateTimer();
+		if (this.phase === "playing") {
+			this.clearCountdown();
+			this.updateTimer();
+		}
 		const now = this.time.now;
 		for (const player of this.players.values()) {
 			player.angle = smoothAim(
@@ -147,6 +154,13 @@ export class ArenaScene extends Phaser.Scene {
 				),
 			);
 			this.drawAim(player);
+			if (!this.reducedMotion && this.time.now >= player.cooldownUntil) {
+				const poseAngle =
+					player.aimActiveUntil > now ? player.normalizedAim * 5 : 0;
+				player.sprite.setAngle(
+					Phaser.Math.Linear(player.sprite.angle, poseAngle, 0.14),
+				);
+			}
 			const cooldown = Math.max(0, player.cooldownUntil - now);
 			player.projectileLabel.setText(
 				cooldown > 0
@@ -159,6 +173,7 @@ export class ArenaScene extends Phaser.Scene {
 			const definition =
 				PROJECTILE_DEFINITIONS[projectile.metadata.projectileType];
 			const body = projectile.body;
+			this.effects?.trail(body, projectile.metadata.projectileType, now);
 			const tooOld =
 				this.time.now - projectile.metadata.createdAt > definition.lifetimeMs;
 			const tooFar =
@@ -178,34 +193,95 @@ export class ArenaScene extends Phaser.Scene {
 
 	private buildArena() {
 		const background = this.add.graphics().setDepth(-10);
-		background.fillStyle(0x081016, 1);
-		background.fillRect(0, 0, GAME_WIDTH, GAME_HEIGHT);
-		background.fillStyle(0x14232b, 1);
-		background.fillRect(0, 525, GAME_WIDTH, 195);
-		background.fillStyle(0x1a3137, 0.8);
-		background.fillRect(0, 0, GAME_WIDTH, 140);
-		background.lineStyle(2, 0x2e5960, 0.7);
-		for (let x = 90; x < GAME_WIDTH; x += 170) {
-			background.strokeRect(x, 26, 118, 86);
-			background.lineBetween(x + 59, 26, x + 59, 112);
+		background.fillStyle(ARCADE_COLORS.sky).fillRect(0, 0, GAME_WIDTH, 350);
+		background.fillStyle(ARCADE_COLORS.skyLight).fillCircle(1080, 80, 78);
+		for (let index = 0; index < 12; index += 1) {
+			const width = 58 + (index % 3) * 22;
+			const height = 70 + (index % 4) * 28;
+			const x = index * 118 - 20;
+			background
+				.fillStyle(index % 2 ? 0x6ba7ca : 0x5795bb)
+				.fillRect(x, 350 - height, width, height);
+			background.fillStyle(0xdff6ff, 0.72);
+			for (let y = 294; y < 338; y += 15)
+				for (let wx = x + 10; wx < x + width - 8; wx += 17)
+					background.fillRect(wx, y, 7, 6);
 		}
-		background.lineStyle(1, 0x31535b, 0.3);
-		for (let x = 0; x <= GAME_WIDTH; x += 44)
-			background.lineBetween(x, 525, x, GAME_HEIGHT);
-		for (let y = 555; y <= GAME_HEIGHT; y += 35)
+		background.fillStyle(ARCADE_COLORS.wall).fillRect(0, 0, GAME_WIDTH, 48);
+		background.fillRect(0, 350, GAME_WIDTH, 210);
+		background
+			.fillStyle(ARCADE_COLORS.wallShade)
+			.fillRect(0, 350, GAME_WIDTH, 16);
+		background.lineStyle(10, ARCADE_COLORS.ink);
+		for (let x = 34; x < GAME_WIDTH; x += 250) {
+			background.strokeRoundedRect(x, 55, 218, 290, 8);
+			background.lineBetween(x + 109, 55, x + 109, 345);
+		}
+		background.fillStyle(ARCADE_COLORS.floor).fillRect(0, 560, GAME_WIDTH, 160);
+		background
+			.fillStyle(ARCADE_COLORS.floorDark)
+			.fillRect(0, 560, GAME_WIDTH, 18);
+		background.lineStyle(2, 0x7185a7, 0.55);
+		for (let x = -80; x <= GAME_WIDTH + 80; x += 92)
+			background.lineBetween(x, 720, x + 80, 560);
+		background.lineStyle(2, 0x465775, 0.65);
+		for (let y = 600; y <= GAME_HEIGHT; y += 40)
 			background.lineBetween(0, y, GAME_WIDTH, y);
 
+		this.add
+			.text(48, 24, "FLICK ARENA", {
+				color: "#172033",
+				fontFamily: "Arial Black, system-ui, sans-serif",
+				fontSize: "24px",
+				fontStyle: "bold",
+			})
+			.setDepth(4);
+		this.add
+			.text(260, 31, "OFFICE MAYHEM", {
+				color: "#5b6d8c",
+				fontFamily: "system-ui, sans-serif",
+				fontSize: "13px",
+				fontStyle: "bold",
+				letterSpacing: 2,
+			})
+			.setDepth(4);
+
 		for (const platform of PLATFORM_LAYOUT) {
-			this.add
-				.rectangle(
-					platform.x,
-					platform.y,
+			const isCeiling = platform.y < 100;
+			const platformArt = this.add.graphics().setDepth(2);
+			platformArt
+				.fillStyle(ARCADE_COLORS.ink)
+				.fillRoundedRect(
+					platform.x - platform.width / 2 - 4,
+					platform.y - platform.height / 2 - 4,
+					platform.width + 8,
+					platform.height + 8,
+					7,
+				);
+			platformArt
+				.fillStyle(
+					isCeiling
+						? ARCADE_COLORS.inkSoft
+						: platform.y > 650
+							? 0x33415e
+							: 0xc7895a,
+				)
+				.fillRoundedRect(
+					platform.x - platform.width / 2,
+					platform.y - platform.height / 2,
 					platform.width,
 					platform.height,
-					0x33545a,
-					1,
-				)
-				.setDepth(1);
+					5,
+				);
+			platformArt
+				.fillStyle(0xffffff, isCeiling ? 0.12 : 0.34)
+				.fillRoundedRect(
+					platform.x - platform.width / 2 + 8,
+					platform.y - platform.height / 2 + 4,
+					platform.width - 16,
+					4,
+					2,
+				);
 			this.matter.add.rectangle(
 				platform.x,
 				platform.y,
@@ -252,27 +328,22 @@ export class ArenaScene extends Phaser.Scene {
 								: "yellow"
 				];
 			this.add
-				.circle(station.x, station.y + 38, 52, tint, 0.09)
-				.setStrokeStyle(2, tint, 0.35)
-				.setDepth(0);
+				.ellipse(station.x, station.y + 45, 142, 58, ARCADE_COLORS.ink, 0.24)
+				.setDepth(1);
 			this.add
-				.text(station.x, station.y + 86, `P${station.playerNumber} STATION`, {
-					color: "#5e7a80",
-					fontFamily: "DM Mono, monospace",
-					fontSize: "10px",
-					letterSpacing: 2,
+				.ellipse(station.x, station.y + 39, 132, 48, tint, 0.32)
+				.setStrokeStyle(5, ARCADE_COLORS.ink, 0.95)
+				.setDepth(2);
+			this.add
+				.text(station.x, station.y + 38, `P${station.playerNumber}`, {
+					color: "#172033",
+					fontFamily: "Arial Black, system-ui, sans-serif",
+					fontSize: "20px",
+					fontStyle: "bold",
 				})
 				.setOrigin(0.5)
-				.setDepth(2);
+				.setDepth(3);
 		}
-		this.add
-			.text(42, 34, "FLICK ARENA // OFFICE BATTLE", {
-				color: "#74e6b2",
-				fontFamily: "DM Mono, monospace",
-				fontSize: "13px",
-				letterSpacing: 3,
-			})
-			.setDepth(4);
 	}
 
 	private buildProps() {
@@ -319,6 +390,7 @@ export class ArenaScene extends Phaser.Scene {
 		switch (command.type) {
 			case "player-joined":
 				this.createPlayer(command.player);
+				this.audio.play("player-join");
 				break;
 			case "player-left":
 				this.removePlayer(command.playerId);
@@ -332,6 +404,7 @@ export class ArenaScene extends Phaser.Scene {
 					command.playerId,
 					command.ready ? "READY" : "NOT READY",
 				);
+				if (command.ready) this.audio.play("player-ready");
 				break;
 			case "player-motion-status":
 				this.setPlayerLabel(
@@ -349,14 +422,12 @@ export class ArenaScene extends Phaser.Scene {
 			}
 			case "flick": {
 				if (this.phase === "lobby") {
-					const player = this.players.get(command.playerId);
-					if (player)
-						this.bridge.emit({
-							type: "practice-throw",
-							playerId: command.playerId,
-							projectileType: player.nextType,
-							source: command.source,
-						});
+					this.launchForPlayer(
+						command.playerId,
+						command.intensity,
+						command.source,
+						true,
+					);
 				} else if (this.phase === "playing") {
 					this.launchForPlayer(
 						command.playerId,
@@ -368,6 +439,12 @@ export class ArenaScene extends Phaser.Scene {
 			}
 			case "start-match":
 				this.startMatch();
+				break;
+			case "set-muted":
+				this.audio.setMuted(command.muted);
+				break;
+			case "set-audio-levels":
+				this.audio.setLevels(command.levels);
 				break;
 			case "reset-match":
 				this.resetMatch();
@@ -397,20 +474,22 @@ export class ArenaScene extends Phaser.Scene {
 				station.y - 64,
 				`P${assignment.playerNumber}  ${assignment.color.toUpperCase()}`,
 				{
-					color: `#${tint.toString(16).padStart(6, "0")}`,
-					fontFamily: "DM Mono, monospace",
-					fontSize: "12px",
-					letterSpacing: 1,
+					color: "#172033",
+					backgroundColor: `#${tint.toString(16).padStart(6, "0")}`,
+					fontFamily: "Arial Black, system-ui, sans-serif",
+					fontSize: "13px",
+					fontStyle: "bold",
+					padding: { x: 10, y: 5 },
 				},
 			)
 			.setOrigin(0.5)
 			.setDepth(7);
 		const projectileLabel = this.add
 			.text(station.x, station.y + 58, "", {
-				color: "#edf7f5",
-				fontFamily: "DM Mono, monospace",
-				fontSize: "10px",
-				letterSpacing: 1,
+				color: "#172033",
+				fontFamily: "system-ui, sans-serif",
+				fontSize: "12px",
+				fontStyle: "bold",
 			})
 			.setOrigin(0.5)
 			.setDepth(7);
@@ -433,6 +512,15 @@ export class ArenaScene extends Phaser.Scene {
 		};
 		this.players.set(assignment.playerId, player);
 		this.setPlayerLabel(assignment.playerId, "BUTTON THROW");
+		if (!this.reducedMotion)
+			this.tweens.add({
+				targets: sprite,
+				y: station.y - 5,
+				duration: 820 + assignment.playerNumber * 70,
+				ease: "Sine.InOut",
+				yoyo: true,
+				repeat: -1,
+			});
 	}
 
 	private removePlayer(playerId: string) {
@@ -488,6 +576,9 @@ export class ArenaScene extends Phaser.Scene {
 			!Array.from(this.players.values()).every((player) => player.ready)
 		)
 			return;
+		this.audio.unlock();
+		this.audio.primeSoundtrack();
+		this.audio.play("ui");
 		this.resetRoundState();
 		this.phase = "countdown";
 		this.bridge.emit({ type: "phase-changed", phase: this.phase });
@@ -500,21 +591,42 @@ export class ArenaScene extends Phaser.Scene {
 			callback: () => {
 				index += 1;
 				this.showCountdown(labels[index] ?? "FLICK!");
-				if (index === labels.length - 1) this.startPlaying();
+				if (index === labels.length - 1) {
+					this.time.delayedCall(350, () => this.startPlaying());
+				}
 			},
 		});
 	}
 
 	private startPlaying() {
-		this.countdownText?.setVisible(false);
+		this.clearCountdown();
 		this.phase = "playing";
+		this.audio.startSoundtrack();
 		this.matchEndsAt = this.time.now + 60_000;
 		this.lastTimerSecond = -1;
 		this.bridge.emit({ type: "phase-changed", phase: this.phase });
 		this.bridge.emit({ type: "timer-changed", timeRemainingMs: 60_000 });
 	}
 
+	private clearCountdown() {
+		const countdown = this.countdownText;
+		this.countdownText = undefined;
+		const countdowns = this.children.list.filter(
+			(child): child is Phaser.GameObjects.Text =>
+				child === countdown ||
+				(child instanceof Phaser.GameObjects.Text && child.text === "FLICK!"),
+		);
+		for (const item of countdowns) {
+			this.tweens.killTweensOf(item);
+			item.setText("").setVisible(false).setActive(false).setAlpha(0);
+			item.removeFromDisplayList();
+			item.removeFromUpdateList();
+			item.destroy();
+		}
+	}
+
 	private showCountdown(label: string) {
+		this.audio.play(label === "FLICK!" ? "round-start" : "countdown");
 		if (!this.countdownText) {
 			this.countdownText = this.add
 				.text(GAME_WIDTH / 2, GAME_HEIGHT / 2, label, {
@@ -536,8 +648,8 @@ export class ArenaScene extends Phaser.Scene {
 		this.tweens.add({
 			targets: this.countdownText,
 			scale: 1,
-			duration: 550,
-			ease: "Back.Out",
+			duration: this.reducedMotion ? 1 : 550,
+			ease: "Quint.Out",
 		});
 	}
 
@@ -547,6 +659,7 @@ export class ArenaScene extends Phaser.Scene {
 		if (second !== this.lastTimerSecond) {
 			this.lastTimerSecond = second;
 			this.bridge.emit({ type: "timer-changed", timeRemainingMs });
+			if (second > 0 && second <= 10) this.audio.play("final-countdown");
 		}
 		if (timeRemainingMs <= 0) this.endMatch();
 	}
@@ -555,15 +668,42 @@ export class ArenaScene extends Phaser.Scene {
 		playerId: string,
 		intensity: number,
 		source: FlickSource,
+		practice = false,
 	) {
 		const player = this.players.get(playerId);
 		if (
 			!player ||
-			this.phase !== "playing" ||
+			(practice ? this.phase !== "lobby" : this.phase !== "playing") ||
 			this.time.now < player.cooldownUntil
 		)
 			return;
 		if (this.projectiles.size >= MAX_ACTIVE_PROJECTILES) return;
+		player.cooldownUntil = this.time.now + THROW_COOLDOWN_MS;
+		if (this.reducedMotion) {
+			this.performLaunch(playerId, intensity, source, practice);
+			return;
+		}
+		player.sprite.setScale(1.08, 0.9).setAngle(player.normalizedAim * 7);
+		this.time.delayedCall(ARCADE_MOTION.fast, () =>
+			this.performLaunch(playerId, intensity, source, practice),
+		);
+	}
+
+	private performLaunch(
+		playerId: string,
+		intensity: number,
+		source: FlickSource,
+		practice: boolean,
+	) {
+		const player = this.players.get(playerId);
+		if (!player) return;
+		if (
+			(practice ? this.phase !== "lobby" : this.phase !== "playing") ||
+			this.projectiles.size >= MAX_ACTIVE_PROJECTILES
+		) {
+			player.sprite.setScale(1).setAngle(0);
+			return;
+		}
 		const projectileType = player.nextType;
 		const definition = PROJECTILE_DEFINITIONS[projectileType];
 		const projectileId = crypto.randomUUID();
@@ -612,38 +752,59 @@ export class ArenaScene extends Phaser.Scene {
 			projectileId,
 			ownerPlayerId: playerId,
 			projectileType,
+			practice,
 			createdAt: this.time.now,
 			scoredPlayerIds: new Set([playerId]),
 			destroyedPropIds: new Set(),
+			lastWorldImpactAt: 0,
 		};
 		this.projectiles.set(projectileId, { body, metadata });
-		player.stats.throws += 1;
-		player.throwCount += 1;
-		player.currentType = projectileType;
-		player.nextType = nextProjectileType(
-			player.throwCount,
-			player.assignment.playerNumber,
-		);
-		player.cooldownUntil = this.time.now + THROW_COOLDOWN_MS;
-		this.bridge.emit({
-			type: "projectile-thrown",
-			playerId,
-			projectileType,
-			source,
-		});
-		this.bridge.emit({
-			type: "stats-changed",
-			playerId,
-			stats: { ...player.stats },
-		});
-		this.tweens.add({
-			targets: player.sprite,
-			scaleX: 1.18,
-			scaleY: 0.86,
-			duration: 100,
-			yoyo: true,
-			ease: "Quad.Out",
-		});
+		this.audio.play(PROJECTILE_AUDIO[projectileType].throw);
+		if (practice) {
+			this.bridge.emit({
+				type: "practice-throw",
+				playerId,
+				projectileType,
+				source,
+			});
+		} else {
+			player.stats.throws += 1;
+			player.throwCount += 1;
+			player.currentType = projectileType;
+			player.nextType = nextProjectileType(
+				player.throwCount,
+				player.assignment.playerNumber,
+			);
+			this.bridge.emit({
+				type: "projectile-thrown",
+				playerId,
+				projectileType,
+				source,
+			});
+			this.bridge.emit({
+				type: "stats-changed",
+				playerId,
+				stats: { ...player.stats },
+			});
+		}
+		if (!this.reducedMotion)
+			this.tweens.add({
+				targets: player.sprite,
+				scaleX: 0.82,
+				scaleY: 1.16,
+				angle: player.normalizedAim * -4,
+				duration: ARCADE_MOTION.fast,
+				ease: "Quint.Out",
+				onComplete: () =>
+					this.tweens.add({
+						targets: player.sprite,
+						scaleX: 1,
+						scaleY: 1,
+						angle: 0,
+						duration: ARCADE_MOTION.feedback,
+						ease: "Back.Out",
+					}),
+			});
 	}
 
 	private handleCollision(event: { pairs?: CollisionPair[] }) {
@@ -662,7 +823,27 @@ export class ArenaScene extends Phaser.Scene {
 				this.handlePlayerHit(projectileId, otherLabel.slice("player:".length));
 			if (otherLabel.startsWith("prop:"))
 				this.handlePropHit(projectileId, otherLabel.slice("prop:".length));
+			if (otherLabel === "world") this.handleWorldHit(projectileId);
 		}
+	}
+
+	private handleWorldHit(projectileId: string) {
+		const projectile = this.projectiles.get(projectileId);
+		if (
+			!projectile ||
+			this.time.now - projectile.metadata.lastWorldImpactAt < 120
+		)
+			return;
+		projectile.metadata.lastWorldImpactAt = this.time.now;
+		this.audio.play("platform-impact");
+		this.effects?.particles(
+			projectile.metadata.projectileType === "paper-ball" ? "paper" : "dot",
+			projectile.body.x,
+			projectile.body.y,
+			projectile.metadata.projectileType === "stapler" ? 7 : 4,
+			ARCADE_COLORS.white,
+			110,
+		);
 	}
 
 	private handlePlayerHit(projectileId: string, targetPlayerId: string) {
@@ -670,6 +851,7 @@ export class ArenaScene extends Phaser.Scene {
 		const target = this.players.get(targetPlayerId);
 		if (
 			!projectile ||
+			projectile.metadata.practice ||
 			!target ||
 			!canScoreAgainst(projectile.metadata.scoredPlayerIds, targetPlayerId)
 		)
@@ -680,6 +862,10 @@ export class ArenaScene extends Phaser.Scene {
 		const score = hitScore(projectile.metadata.projectileType);
 		attacker.stats.score += score;
 		attacker.stats.playerHits += 1;
+		this.audio.play(
+			PROJECTILE_AUDIO[projectile.metadata.projectileType].impact,
+		);
+		this.audio.play("player-hit");
 		this.emitScore(attacker);
 		this.bridge.emit({
 			type: "player-hit",
@@ -687,24 +873,30 @@ export class ArenaScene extends Phaser.Scene {
 			targetPlayerId,
 			score,
 		});
-		this.spawnBurst(
+		this.effects?.impact(
 			target.sprite.x,
 			target.sprite.y,
+			projectile.metadata.projectileType === "stapler",
 			PLAYER_HEX[target.assignment.color],
-			10,
+		);
+		this.effects?.score(
+			target.sprite.x,
+			target.sprite.y - 42,
+			score,
+			PLAYER_HEX[attacker.assignment.color],
 		);
 		target.sprite.setTint(0xffffff);
 		this.tweens.add({
 			targets: target.sprite,
-			scale: 1.2,
-			duration: 110,
+			x:
+				target.sprite.x +
+				((projectile.body.body?.velocity.x ?? 0) >= 0 ? 18 : -18),
+			scaleX: 1.22,
+			scaleY: 0.82,
+			duration: 130,
 			yoyo: true,
 			onComplete: () => target.sprite.clearTint(),
 		});
-		this.cameras.main.shake(
-			projectile.metadata.projectileType === "stapler" ? 150 : 80,
-			projectile.metadata.projectileType === "stapler" ? 0.012 : 0.005,
-		);
 	}
 
 	private handlePropHit(projectileId: string, propId: string) {
@@ -712,6 +904,7 @@ export class ArenaScene extends Phaser.Scene {
 		const prop = this.props.get(propId);
 		if (
 			!projectile ||
+			projectile.metadata.practice ||
 			!prop ||
 			prop.destroyed ||
 			projectile.metadata.destroyedPropIds.has(propId)
@@ -723,16 +916,22 @@ export class ArenaScene extends Phaser.Scene {
 			definition.maxHealth > 0
 				? PROJECTILE_DEFINITIONS[projectile.metadata.projectileType].propDamage
 				: 1;
+		this.audio.play(
+			PROJECTILE_AUDIO[projectile.metadata.projectileType].impact,
+		);
 		prop.body.setTint(0xffb070);
+		prop.body.setTexture(`${definition.textureKey}-damaged`);
 		this.tweens.add({
 			targets: prop.body,
 			x: prop.body.x + 5,
 			duration: 55,
 			yoyo: true,
 			repeat: 2,
-			onComplete: () => prop.body.clearTint(),
+			onComplete: () => {
+				if (!prop.destroyed) prop.body.setTint(0xd6ad96);
+			},
 		});
-		this.spawnBurst(prop.body.x, prop.body.y, 0xffb070, 7);
+		this.effects?.particles("dot", prop.body.x, prop.body.y, 7, 0xffb070);
 		if (prop.health > 0) return;
 		prop.destroyed = true;
 		const attacker = this.players.get(projectile.metadata.ownerPlayerId);
@@ -747,14 +946,26 @@ export class ArenaScene extends Phaser.Scene {
 				propType: prop.type,
 				score,
 			});
+			this.effects?.score(
+				prop.body.x,
+				prop.body.y - 36,
+				score,
+				PLAYER_HEX[attacker.assignment.color],
+			);
 		}
-		this.spawnBurst(prop.body.x, prop.body.y, 0xffd166, 18);
+		this.audio.play(`${prop.type}-break`);
+		this.effects?.destroyProp(prop.type, prop.body.x, prop.body.y);
+		prop.body
+			.setTexture(`${definition.textureKey}-broken`)
+			.clearTint()
+			.setCollidesWith(0);
 		this.tweens.add({
 			targets: prop.body,
-			alpha: 0,
-			scale: 1.25,
-			duration: 220,
-			onComplete: () => prop.body.destroy(),
+			scaleX: 1.18,
+			scaleY: 0.72,
+			y: prop.body.y + 12,
+			duration: 260,
+			ease: "Quint.Out",
 		});
 	}
 
@@ -769,12 +980,6 @@ export class ArenaScene extends Phaser.Scene {
 			playerId: player.assignment.playerId,
 			stats: { ...player.stats },
 		});
-	}
-
-	private spawnBurst(x: number, y: number, color: number, quantity: number) {
-		if (!this.particles) return;
-		this.particles.setParticleTint(color);
-		this.particles.explode(Math.min(quantity, 20), x, y);
 	}
 
 	private destroyProjectile(projectileId: string) {
@@ -805,6 +1010,7 @@ export class ArenaScene extends Phaser.Scene {
 	}
 
 	private resetMatch() {
+		this.audio.stopSoundtrack();
 		this.resetRoundState();
 		this.phase = "lobby";
 		this.matchEndsAt = 0;
@@ -816,6 +1022,7 @@ export class ArenaScene extends Phaser.Scene {
 
 	private endMatch() {
 		if (this.phase !== "playing") return;
+		this.audio.stopSoundtrack();
 		this.phase = "results";
 		const standings = Array.from(this.players.values())
 			.sort(
@@ -831,16 +1038,32 @@ export class ArenaScene extends Phaser.Scene {
 		this.bridge.emit({ type: "phase-changed", phase: this.phase });
 		this.bridge.emit({ type: "timer-changed", timeRemainingMs: 0 });
 		this.bridge.emit({ type: "match-ended", standings });
+		this.audio.play("round-end");
+		this.time.delayedCall(180, () => this.audio.play("winner"));
 		const winner = this.players.get(standings[0]?.playerId ?? "");
-		if (winner)
+		if (winner && !this.reducedMotion) {
 			this.tweens.add({
 				targets: winner.sprite,
-				scale: 1.24,
-				duration: 360,
+				y: winner.sprite.y - 32,
+				angle: 8,
+				scale: 1.18,
+				duration: 300,
 				yoyo: true,
-				repeat: 2,
+				repeat: 3,
 			});
-		this.spawnBurst(GAME_WIDTH / 2, 220, 0x74e6b2, 20);
+		}
+		if (!this.reducedMotion)
+			for (const player of this.players.values())
+				if (player !== winner)
+					this.tweens.add({
+						targets: player.sprite,
+						angle: player.assignment.playerNumber % 2 ? -5 : 5,
+						y: player.sprite.y + 8,
+						duration: 420,
+						yoyo: true,
+						repeat: 1,
+					});
+		if (!this.reducedMotion) this.effects?.confetti();
 	}
 
 	private ensureKeyboardPlayer() {
@@ -895,6 +1118,8 @@ export class ArenaScene extends Phaser.Scene {
 		this.removeBridgeListener?.();
 		this.matter.world.off("collisionstart", this.handleCollision, this);
 		this.input.keyboard?.off("keydown", this.handleKeyboard, this);
+		this.audio.destroy();
+		this.effects?.destroy();
 	}
 }
 

@@ -1,9 +1,15 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import QRCode from "qrcode";
-import type { Dispatch, SetStateAction } from "react";
+import type { Dispatch, KeyboardEvent, SetStateAction } from "react";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { PhaserGame } from "../components/PhaserGame";
+import {
+	type AudioLevels,
+	DEFAULT_AUDIO_LEVELS,
+	playUiCue,
+	readAudioPreferences,
+} from "../game/audio/ArcadeAudio";
 import { GameBridge } from "../game/bridge/GameBridge";
 import type { GameToReactEvent } from "../game/bridge/game-events";
 import type {
@@ -24,6 +30,26 @@ export const Route = createFileRoute("/host")({
 });
 
 const isDevelopment = import.meta.env.DEV;
+const CONFETTI_PIECES = [
+	"c1",
+	"c2",
+	"c3",
+	"c4",
+	"c5",
+	"c6",
+	"c7",
+	"c8",
+	"c9",
+	"c10",
+	"c11",
+	"c12",
+	"c13",
+	"c14",
+	"c15",
+	"c16",
+	"c17",
+	"c18",
+] as const;
 
 function HostPage() {
 	const { room } = Route.useSearch();
@@ -36,10 +62,17 @@ function HostPage() {
 	const [timeRemainingMs, setTimeRemainingMs] = useState(0);
 	const [standings, setStandings] = useState<MatchStanding[]>([]);
 	const [qrData, setQrData] = useState("");
+	const [muted, setMuted] = useState(false);
+	const [reconnectAttempt, setReconnectAttempt] = useState(0);
+	const [audioLevels, setAudioLevels] = useState<AudioLevels>({
+		...DEFAULT_AUDIO_LEVELS,
+	});
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: The socket lifecycle is keyed by room; upsertPlayer only uses stable state setters.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Socket retry is keyed by room and reconnect attempt; upsertPlayer only uses stable state setters.
 	useEffect(() => {
 		if (!room || typeof WebSocket === "undefined") return;
+		let active = true;
+		let retryTimer: number | undefined;
 		const controllerUrl = `${window.location.origin}/controller?room=${encodeURIComponent(room)}`;
 		void QRCode.toDataURL(controllerUrl, {
 			width: 180,
@@ -148,13 +181,25 @@ function HostPage() {
 				}
 			}
 		};
-		socket.onclose = () => setSocketState("Disconnected");
-		socket.onerror = () => setSocketState("Error");
+		socket.onclose = () => {
+			if (!active) return;
+			setSocketState("Reconnecting");
+			retryTimer = window.setTimeout(
+				() => setReconnectAttempt((attempt) => attempt + 1),
+				650,
+			);
+		};
+		socket.onerror = () => {
+			setSocketState("Error");
+			playUiCue("ui-error");
+		};
 		return () => {
+			active = false;
+			if (retryTimer) window.clearTimeout(retryTimer);
 			socket.close();
 			socketRef.current = null;
 		};
-	}, [room]);
+	}, [room, reconnectAttempt]);
 
 	useEffect(() => {
 		return bridgeRef.current.onEvent((event) =>
@@ -167,6 +212,17 @@ function HostPage() {
 				setStandings,
 			),
 		);
+	}, []);
+
+	useEffect(() => {
+		const preferences = readAudioPreferences();
+		setMuted(preferences.muted);
+		setAudioLevels(preferences.levels);
+		bridgeRef.current.send({ type: "set-muted", muted: preferences.muted });
+		bridgeRef.current.send({
+			type: "set-audio-levels",
+			levels: preferences.levels,
+		});
 	}, []);
 
 	function upsertPlayer(player: LobbyPlayer | PlayerAssignment) {
@@ -197,23 +253,34 @@ function HostPage() {
 	function startMatch() {
 		const connected = players.filter((player) => player.connected);
 		const ready = connected.filter((player) => player.ready);
-		if (!isDevelopment && (connected.length < 2 || ready.length < 2)) return;
-		if (
-			isDevelopment &&
-			connected.length > 0 &&
-			connected.length < 2 &&
-			ready.length === 0
-		) {
-			bridgeRef.current.send({ type: "start-match" });
-			return;
-		}
-		if (connected.length >= 2 && ready.length < 2) return;
+		const hasEnoughPlayers = isDevelopment || connected.length >= 2;
+		const allPlayersReady =
+			connected.length < 2 || ready.length === connected.length;
+		if (!hasEnoughPlayers || !allPlayersReady) return;
 		bridgeRef.current.send({ type: "start-match" });
 	}
 
 	function resetMatch() {
 		bridgeRef.current.send({ type: "reset-match" });
 		setStandings([]);
+	}
+
+	function playAgain() {
+		bridgeRef.current.send({ type: "reset-match" });
+		setStandings([]);
+		bridgeRef.current.send({ type: "start-match" });
+	}
+
+	function toggleMuted() {
+		const next = !muted;
+		setMuted(next);
+		bridgeRef.current.send({ type: "set-muted", muted: next });
+	}
+
+	function updateAudioLevel(key: keyof AudioLevels, value: number) {
+		const next = { ...audioLevels, [key]: value };
+		setAudioLevels(next);
+		bridgeRef.current.send({ type: "set-audio-levels", levels: next });
 	}
 
 	function simulateFlick() {
@@ -227,12 +294,36 @@ function HostPage() {
 	}
 
 	if (!room) return <EmptyRoom />;
-	const connectedCount = players.filter((player) => player.connected).length;
+	const connectedPlayers = players.filter((player) => player.connected);
+	const connectedCount = connectedPlayers.length;
+	const readyCount = connectedPlayers.filter((player) => player.ready).length;
+	const allPlayersReady = connectedCount > 0 && readyCount === connectedCount;
 	const seconds = Math.ceil(timeRemainingMs / 1000);
-	const canStart = phase === "lobby" || phase === "results";
+	const canStart =
+		phase === "lobby" &&
+		(isDevelopment
+			? connectedCount < 2 || allPlayersReady
+			: connectedCount >= 2 && allPlayersReady);
+	const startLabel =
+		isDevelopment && connectedCount < 2
+			? "Start Demo Round"
+			: connectedCount < 2
+				? "Need 2 Players"
+				: !allPlayersReady
+					? `Waiting for ${connectedCount - readyCount}`
+					: "Start Round";
+	const readinessCopy =
+		connectedCount === 0
+			? "Waiting for players. Scan the QR code to join."
+			: connectedCount < 2
+				? "One more player is needed for a full match."
+				: allPlayersReady
+					? "Everyone’s ready. Start when the room is watching."
+					: `${readyCount} of ${connectedCount} players ready.`;
+	const finalMoments = phase === "playing" && seconds <= 10;
 
 	return (
-		<main className="host-shell">
+		<main className={`host-shell ${finalMoments ? "is-final-moments" : ""}`}>
 			<header className="app-header">
 				<Link to="/" className="brand-mark">
 					<span className="brand-dot" />
@@ -242,8 +333,19 @@ function HostPage() {
 					<span className="status-dot" /> HOST <strong>{socketState}</strong>
 				</div>
 				<div className="header-help">
-					{phase.toUpperCase()} <span>·</span> ARROWS / SPACE DEBUG
+					{phase.toUpperCase()} <span>·</span> OFFICE MAYHEM
 				</div>
+				<button
+					className="sound-toggle"
+					type="button"
+					onClick={toggleMuted}
+					onMouseEnter={() => playUiCue("ui-hover")}
+					onFocus={() => playUiCue("ui-hover")}
+					aria-pressed={muted}
+					aria-label={muted ? "Turn sound on" : "Mute sound"}
+				>
+					{muted ? "Sound off" : "Sound on"}
+				</button>
 			</header>
 			<section className="host-layout">
 				<div className="game-panel">
@@ -266,6 +368,13 @@ function HostPage() {
 							bridge={bridgeRef.current}
 							allowSinglePlayer={isDevelopment}
 						/>
+						{phase === "results" ? (
+							<ResultsOverlay
+								standings={standings}
+								onPlayAgain={playAgain}
+								onBackToLobby={resetMatch}
+							/>
+						) : null}
 					</div>
 					<div className="scoreboard-strip">
 						{players
@@ -333,43 +442,51 @@ function HostPage() {
 							</p>
 						) : null}
 					</div>
-					{phase === "results" ? <Results standings={standings} /> : null}
 					<div className="host-actions">
-						<button
-							className="simulate-button"
-							type="button"
-							onClick={startMatch}
-							disabled={!canStart}
-						>
-							{isDevelopment && connectedCount < 2
-								? "Start Demo Round"
-								: "Start Round"}
-						</button>
+						{phase === "lobby" ? (
+							<button
+								className="simulate-button"
+								type="button"
+								onClick={startMatch}
+								onMouseEnter={() => playUiCue("ui-hover")}
+								onFocus={() => playUiCue("ui-hover")}
+								disabled={!canStart}
+							>
+								{startLabel}
+							</button>
+						) : null}
 						{isDevelopment ? (
 							<button
 								className="secondary-host-button"
 								type="button"
 								onClick={simulateFlick}
+								onMouseEnter={() => playUiCue("ui-hover")}
+								onFocus={() => playUiCue("ui-hover")}
 								disabled={phase !== "playing"}
 							>
 								✦ Simulate Flick
 							</button>
 						) : null}
-						{phase === "results" ? (
-							<button
-								className="secondary-host-button"
-								type="button"
-								onClick={resetMatch}
-							>
-								Play Again
-							</button>
-						) : null}
 					</div>
-					<p className="rail-hint">
-						{isDevelopment
-							? "Dev mode: keyboard fallback and one-player demo are enabled."
-							: "Drag to aim, then mark ready. Physical flick is optional."}
-					</p>
+					<details className="audio-settings">
+						<summary>Audio mix</summary>
+						{(["master", "music", "effects"] as const).map((key) => (
+							<label key={key}>
+								<span>{key}</span>
+								<input
+									type="range"
+									min="0"
+									max="1"
+									step="0.05"
+									value={audioLevels[key]}
+									onChange={(event) =>
+										updateAudioLevel(key, Number(event.currentTarget.value))
+									}
+								/>
+							</label>
+						))}
+					</details>
+					<p className="rail-hint">{readinessCopy}</p>
 				</aside>
 			</section>
 		</main>
@@ -477,9 +594,7 @@ function LobbyRow({ player, score }: { player: LobbyPlayer; score: number }) {
 				<strong>{player.color.toUpperCase()} PLAYER</strong>
 				<small>
 					{player.connected
-						? player.motionEnabled
-							? "PHYSICAL FLICK"
-							: "BUTTON THROW"
+						? `${player.motionEnabled ? "PHYSICAL FLICK" : "BUTTON THROW"} · ${player.ready ? "READY" : "NOT READY"}`
 						: "RECONNECTING"}
 				</small>
 			</div>
@@ -493,22 +608,107 @@ function LobbyRow({ player, score }: { player: LobbyPlayer; score: number }) {
 	);
 }
 
-function Results({ standings }: { standings: MatchStanding[] }) {
+function ResultsOverlay({
+	standings,
+	onPlayAgain,
+	onBackToLobby,
+}: {
+	standings: MatchStanding[];
+	onPlayAgain: () => void;
+	onBackToLobby: () => void;
+}) {
+	const dialogRef = useRef<HTMLDivElement>(null);
+	const primaryActionRef = useRef<HTMLButtonElement>(null);
+	useEffect(() => {
+		const previouslyFocused = document.activeElement as HTMLElement | null;
+		primaryActionRef.current?.focus();
+		return () => previouslyFocused?.focus();
+	}, []);
+
+	function trapDialogFocus(event: KeyboardEvent<HTMLDivElement>) {
+		if (event.key !== "Tab") return;
+		const controls = Array.from(
+			dialogRef.current?.querySelectorAll<HTMLButtonElement>(
+				"button:not(:disabled)",
+			) ?? [],
+		);
+		const first = controls[0];
+		const last = controls.at(-1);
+		if (!first || !last) return;
+		if (event.shiftKey && document.activeElement === first) {
+			event.preventDefault();
+			last.focus();
+		} else if (!event.shiftKey && document.activeElement === last) {
+			event.preventDefault();
+			first.focus();
+		}
+	}
+
 	if (standings.length === 0) return null;
+	const winner = standings[0];
 	return (
-		<div className="results-card">
-			<span className="panel-label">FINAL RANKING</span>
-			{standings.map((standing) => (
-				<div key={standing.playerId} className="result-row">
-					<strong>
-						#{standing.rank} P{standing.playerNumber}
-					</strong>
-					<span>
-						{standing.score} pts · {standing.playerHits} hits ·{" "}
-						{standing.propsDestroyed} props
-					</span>
+		<div
+			ref={dialogRef}
+			className="results-overlay"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="results-title"
+			onKeyDown={trapDialogFocus}
+		>
+			<div className="results-sheet">
+				<div
+					className={`winner-mascot color-${winner?.color ?? "blue"}`}
+					aria-hidden="true"
+				>
+					<span>P{winner?.playerNumber}</span>
 				</div>
-			))}
+				<div className="results-confetti" aria-hidden="true">
+					{CONFETTI_PIECES.map((piece) => (
+						<i key={piece} />
+					))}
+				</div>
+				<span className="results-kicker">OFFICE MAYHEM COMPLETE</span>
+				<h2 id="results-title">P{winner?.playerNumber} wins the office</h2>
+				<p className="results-score">{winner?.score ?? 0} points</p>
+				<ol className="results-list" aria-label="Final ranking">
+					{standings.map((standing) => (
+						<li
+							key={standing.playerId}
+							className={`result-row color-${standing.color}`}
+						>
+							<strong>
+								#{standing.rank} · P{standing.playerNumber}
+							</strong>
+							<span>{standing.score} pts</span>
+							<small>
+								{standing.playerHits} hits · {standing.propsDestroyed} props ·{" "}
+								{standing.throws} throws
+							</small>
+						</li>
+					))}
+				</ol>
+				<div className="results-actions">
+					<button
+						ref={primaryActionRef}
+						type="button"
+						className="simulate-button"
+						onClick={onPlayAgain}
+						onMouseEnter={() => playUiCue("ui-hover")}
+						onFocus={() => playUiCue("ui-hover")}
+					>
+						Play Again
+					</button>
+					<button
+						type="button"
+						className="secondary-host-button"
+						onClick={onBackToLobby}
+						onMouseEnter={() => playUiCue("ui-hover")}
+						onFocus={() => playUiCue("ui-hover")}
+					>
+						Back to Lobby
+					</button>
+				</div>
+			</div>
 		</div>
 	);
 }
