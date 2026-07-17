@@ -9,10 +9,16 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WatchRouteImport } from './routes/watch'
 import { Route as HostRouteImport } from './routes/host'
 import { Route as ControllerRouteImport } from './routes/controller'
 import { Route as IndexRouteImport } from './routes/index'
 
+const WatchRoute = WatchRouteImport.update({
+  id: '/watch',
+  path: '/watch',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const HostRoute = HostRouteImport.update({
   id: '/host',
   path: '/host',
@@ -33,34 +39,45 @@ export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/controller': typeof ControllerRoute
   '/host': typeof HostRoute
+  '/watch': typeof WatchRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/controller': typeof ControllerRoute
   '/host': typeof HostRoute
+  '/watch': typeof WatchRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/controller': typeof ControllerRoute
   '/host': typeof HostRoute
+  '/watch': typeof WatchRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/controller' | '/host'
+  fullPaths: '/' | '/controller' | '/host' | '/watch'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/controller' | '/host'
-  id: '__root__' | '/' | '/controller' | '/host'
+  to: '/' | '/controller' | '/host' | '/watch'
+  id: '__root__' | '/' | '/controller' | '/host' | '/watch'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ControllerRoute: typeof ControllerRoute
   HostRoute: typeof HostRoute
+  WatchRoute: typeof WatchRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/watch': {
+      id: '/watch'
+      path: '/watch'
+      fullPath: '/watch'
+      preLoaderRoute: typeof WatchRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/host': {
       id: '/host'
       path: '/host'
@@ -89,6 +106,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ControllerRoute: ControllerRoute,
   HostRoute: HostRoute,
+  WatchRoute: WatchRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

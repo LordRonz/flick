@@ -4,9 +4,11 @@ import { GAME_HEIGHT, GAME_WIDTH } from "./config/arena";
 import { ArenaScene } from "./scenes/ArenaScene";
 import { BootScene } from "./scenes/BootScene";
 import { PreloadScene } from "./scenes/PreloadScene";
+import type { GameMode } from "./types";
 
 export function createGameConfig(
 	bridge: GameBridge,
+	mode: GameMode,
 	allowSinglePlayer: boolean,
 ): Phaser.Types.Core.GameConfig {
 	return {
@@ -33,7 +35,7 @@ export function createGameConfig(
 		scene: [
 			new BootScene(),
 			new PreloadScene(),
-			new ArenaScene(bridge, allowSinglePlayer),
+			new ArenaScene(bridge, mode, allowSinglePlayer),
 		],
 	};
 }

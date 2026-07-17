@@ -54,6 +54,155 @@ const standingSchema = playerAssignmentSchema.extend({
 	...playerRoundStatsSchema.shape,
 });
 
+const spectatorPlayerStateSchema = playerAssignmentSchema
+	.extend({
+		stationId: z.string().min(1).max(32),
+		x: finiteNumber,
+		y: finiteNumber,
+		rotation: finiteNumber,
+		aimAngle: finiteNumber,
+		cooldownRemainingMs: finiteNumber.min(0),
+		animationState: z.enum([
+			"idle",
+			"aiming",
+			"throwing",
+			"hit",
+			"winning",
+			"losing",
+		]),
+		ready: z.boolean(),
+	})
+	.strict();
+
+const spectatorProjectileStateSchema = z
+	.object({
+		projectileId: z.string().uuid(),
+		ownerPlayerId: z.string().uuid(),
+		projectileType: projectileTypeSchema,
+		x: finiteNumber,
+		y: finiteNumber,
+		rotation: finiteNumber,
+		velocityX: finiteNumber,
+		velocityY: finiteNumber,
+	})
+	.strict();
+
+const spectatorPropStateSchema = z
+	.object({
+		propId: z.string().min(1).max(64),
+		propType: propTypeSchema,
+		x: finiteNumber,
+		y: finiteNumber,
+		rotation: finiteNumber,
+		health: finiteNumber.min(0),
+		maxHealth: finiteNumber.positive(),
+		destroyed: z.boolean(),
+		damageState: z.number().int().min(0).max(3),
+	})
+	.strict();
+
+export const SpectatorSnapshotSchema = z
+	.object({
+		type: z.literal("spectator-snapshot"),
+		sequence: z.number().int().nonnegative(),
+		hostTimestamp: finiteNumber.nonnegative(),
+		phase: matchPhaseSchema,
+		timeRemainingMs: finiteNumber.min(0),
+		countdownValue: z
+			.union([z.literal(3), z.literal(2), z.literal(1), z.literal("FLICK")])
+			.optional(),
+		players: z.array(spectatorPlayerStateSchema).max(4),
+		projectiles: z.array(spectatorProjectileStateSchema).max(32),
+		props: z.array(spectatorPropStateSchema).max(8),
+		scores: z
+			.array(
+				z
+					.object({
+						playerId: z.string().uuid(),
+						score: z.number().int().nonnegative(),
+					})
+					.strict(),
+			)
+			.max(4),
+		standings: z.array(standingSchema).max(4).optional(),
+		targetSpectatorId: z.string().uuid().optional(),
+	})
+	.strict();
+
+export const SpectatorPresentationEventSchema = z.discriminatedUnion("type", [
+	z
+		.object({
+			type: z.literal("projectile-thrown"),
+			eventId: z.string().uuid(),
+			playerId: z.string().uuid(),
+			projectileId: z.string().uuid(),
+			projectileType: projectileTypeSchema,
+			intensity: finiteNumber.min(0).max(1),
+		})
+		.strict(),
+	z
+		.object({
+			type: z.literal("player-hit"),
+			eventId: z.string().uuid(),
+			attackerPlayerId: z.string().uuid(),
+			targetPlayerId: z.string().uuid(),
+			projectileType: projectileTypeSchema,
+			score: z.number().int().nonnegative(),
+			impactX: finiteNumber,
+			impactY: finiteNumber,
+			impactStrength: finiteNumber.min(0),
+		})
+		.strict(),
+	z
+		.object({
+			type: z.literal("prop-damaged"),
+			eventId: z.string().uuid(),
+			propId: z.string().min(1).max(64),
+			propType: propTypeSchema,
+			impactX: finiteNumber,
+			impactY: finiteNumber,
+		})
+		.strict(),
+	z
+		.object({
+			type: z.literal("prop-destroyed"),
+			eventId: z.string().uuid(),
+			playerId: z.string().uuid(),
+			propId: z.string().min(1).max(64),
+			propType: propTypeSchema,
+			score: z.number().int().nonnegative(),
+			impactX: finiteNumber,
+			impactY: finiteNumber,
+		})
+		.strict(),
+	z
+		.object({
+			type: z.literal("countdown"),
+			eventId: z.string().uuid(),
+			value: z.union([
+				z.literal(3),
+				z.literal(2),
+				z.literal(1),
+				z.literal("FLICK"),
+			]),
+		})
+		.strict(),
+	z
+		.object({
+			type: z.literal("match-ended"),
+			eventId: z.string().uuid(),
+			standings: z.array(standingSchema).max(4),
+		})
+		.strict(),
+]);
+
+const spectatorEventMessageSchema = z
+	.object({
+		type: z.literal("spectator-event"),
+		event: SpectatorPresentationEventSchema,
+	})
+	.strict();
+
 const flickAcceptedSchema = z
 	.object({
 		type: z.literal("flick-accepted"),
@@ -123,6 +272,8 @@ export const HostToRoomMessageSchema = z.discriminatedUnion("type", [
 		type: z.literal("round-result"),
 		standings: z.array(standingSchema).max(4),
 	}),
+	SpectatorSnapshotSchema,
+	spectatorEventMessageSchema,
 ]);
 
 export const RoomToHostMessageSchema = z.discriminatedUnion("type", [
@@ -143,6 +294,59 @@ export const RoomToHostMessageSchema = z.discriminatedUnion("type", [
 			type: z.literal("controller-input"),
 			playerId: z.string().uuid(),
 			input: controllerInputSchema,
+		})
+		.strict(),
+	z
+		.object({
+			type: z.literal("spectator-connected"),
+			spectatorId: z.string().uuid(),
+		})
+		.strict(),
+	z
+		.object({
+			type: z.literal("spectator-disconnected"),
+			spectatorId: z.string().uuid(),
+		})
+		.strict(),
+	z
+		.object({
+			type: z.literal("spectator-count"),
+			count: z.number().int().nonnegative(),
+		})
+		.strict(),
+	z
+		.object({
+			type: z.literal("spectator-sync-request"),
+			spectatorId: z.string().uuid(),
+		})
+		.strict(),
+	z.object({ type: z.literal("error"), message: z.string().min(1).max(180) }),
+]);
+
+export const SpectatorToRoomMessageSchema = z.discriminatedUnion("type", [
+	z.object({ type: z.literal("request-sync") }).strict(),
+	z
+		.object({
+			type: z.literal("ping"),
+			timestamp: finiteNumber,
+		})
+		.strict(),
+]);
+
+export const RoomToSpectatorMessageSchema = z.discriminatedUnion("type", [
+	SpectatorSnapshotSchema,
+	spectatorEventMessageSchema,
+	z
+		.object({
+			type: z.literal("host-unavailable"),
+			message: z.string().min(1).max(180),
+		})
+		.strict(),
+	z
+		.object({
+			type: z.literal("pong"),
+			timestamp: finiteNumber,
+			serverTimestamp: finiteNumber,
 		})
 		.strict(),
 	z.object({ type: z.literal("error"), message: z.string().min(1).max(180) }),
@@ -195,6 +399,19 @@ export type FlickInputMessage = Extract<ControllerMessage, { type: "flick" }>;
 export type HostToRoomMessage = z.infer<typeof HostToRoomMessageSchema>;
 export type RoomToHostMessage = z.infer<typeof RoomToHostMessageSchema>;
 export type HostMessage = z.infer<typeof HostMessageSchema>;
+export type SpectatorSnapshot = z.infer<typeof SpectatorSnapshotSchema>;
+export type SpectatorPlayerState = SpectatorSnapshot["players"][number];
+export type SpectatorProjectileState = SpectatorSnapshot["projectiles"][number];
+export type SpectatorPropState = SpectatorSnapshot["props"][number];
+export type SpectatorPresentationEvent = z.infer<
+	typeof SpectatorPresentationEventSchema
+>;
+export type SpectatorToRoomMessage = z.infer<
+	typeof SpectatorToRoomMessageSchema
+>;
+export type RoomToSpectatorMessage = z.infer<
+	typeof RoomToSpectatorMessageSchema
+>;
 
 export type PlayerAssignmentMessage = {
 	playerId: string;
@@ -207,12 +424,14 @@ export type NetworkProjectileType = ProjectileType;
 export type NetworkPropType = PropType;
 
 export const MAX_MESSAGE_BYTES = 4096;
+export const MAX_HOST_MESSAGE_BYTES = 32_768;
 
 export function parseJsonMessage<T>(
 	raw: string,
 	schema: z.ZodType<T>,
+	maxBytes = MAX_MESSAGE_BYTES,
 ): T | null {
-	if (new TextEncoder().encode(raw).byteLength > MAX_MESSAGE_BYTES) return null;
+	if (new TextEncoder().encode(raw).byteLength > maxBytes) return null;
 	try {
 		const parsed: unknown = JSON.parse(raw);
 		const result = schema.safeParse(parsed);

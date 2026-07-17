@@ -15,21 +15,35 @@ import {
 	ControllerMessageSchema,
 	type HostToRoomMessage,
 	HostToRoomMessageSchema,
+	MAX_HOST_MESSAGE_BYTES,
 	MAX_MESSAGE_BYTES,
 	parseJsonMessage,
 	type RoomToHostMessage,
+	SpectatorToRoomMessageSchema,
 } from "../realtime/protocol";
+import {
+	canAcceptSpectator,
+	MAX_SPECTATORS,
+} from "../realtime/spectator-policy";
 
 const MAX_CONTROLLERS = 4;
+export { MAX_SPECTATORS };
 const RECONNECT_GRACE_MS = 15_000;
 const CLOSE_HOST_LEFT = 4001;
 
-type ConnectionAttachment = {
-	role: "host" | "controller";
-	connectedAt: number;
-	sessionId?: string;
-	player?: PlayerAssignment;
-};
+type ConnectionAttachment =
+	| { role: "host"; connectedAt: number }
+	| {
+			role: "controller";
+			sessionId: string;
+			player: PlayerAssignment;
+			connectedAt: number;
+	  }
+	| {
+			role: "spectator";
+			spectatorId: string;
+			connectedAt: number;
+	  };
 
 type StoredPlayerSession = {
 	player: PlayerAssignment;
@@ -57,17 +71,27 @@ export class FlickRoom extends DurableObject {
 			return new Response("WebSocket upgrade required.", { status: 426 });
 
 		const role = url.searchParams.get("role");
-		if (role !== "host" && role !== "controller")
-			return new Response("Role must be host or controller.", { status: 400 });
+		if (role !== "host" && role !== "controller" && role !== "spectator")
+			return new Response("Role must be host, controller, or spectator.", {
+				status: 400,
+			});
 		if (role === "host" && this.socketFor("host"))
 			return new Response("host is already connected.", { status: 409 });
-		if (role === "controller" && !this.socketFor("host"))
+		if (
+			(role === "controller" || role === "spectator") &&
+			!this.socketFor("host")
+		)
 			return new Response("Host is not connected.", { status: 409 });
+		if (
+			role === "spectator" &&
+			!canAcceptSpectator(this.spectatorSockets().length)
+		)
+			return new Response("Spectator display limit reached.", { status: 409 });
 
 		const pair = new WebSocketPair();
 		const clientSocket = pair[0];
 		const serverSocket = pair[1];
-		let attachment: ConnectionAttachment = { role, connectedAt: Date.now() };
+		let attachment: ConnectionAttachment;
 
 		if (role === "controller") {
 			const sessionId = this.sessionId(url.searchParams.get("sessionId"));
@@ -80,11 +104,24 @@ export class FlickRoom extends DurableObject {
 				return new Response("Four controllers are already connected.", {
 					status: 409,
 				});
-			attachment = { ...attachment, sessionId, player: assignment.player };
+			attachment = {
+				role,
+				connectedAt: Date.now(),
+				sessionId,
+				player: assignment.player,
+			};
 			await this.state.storage.put(this.sessionKey(sessionId), {
 				...assignment,
 				disconnectedAt: undefined,
 			});
+		} else if (role === "spectator") {
+			attachment = {
+				role,
+				spectatorId: crypto.randomUUID(),
+				connectedAt: Date.now(),
+			};
+		} else {
+			attachment = { role, connectedAt: Date.now() };
 		}
 
 		this.state.acceptWebSocket(serverSocket);
@@ -92,7 +129,8 @@ export class FlickRoom extends DurableObject {
 
 		if (role === "host") {
 			await this.sendLobbyState(serverSocket);
-		} else if (attachment.player) {
+			this.send(serverSocket, { type: "spectator-count", count: 0 });
+		} else if (attachment.role === "controller") {
 			this.send(serverSocket, {
 				type: "assignment",
 				player: attachment.player,
@@ -103,6 +141,13 @@ export class FlickRoom extends DurableObject {
 			});
 			await this.sendLobbyState(this.socketFor("host"));
 			await this.sendLobbyState(serverSocket);
+		} else if (attachment.role === "spectator") {
+			this.send(this.socketFor("host"), {
+				type: "spectator-connected",
+				spectatorId: attachment.spectatorId,
+			});
+			this.sendSpectatorCount();
+			this.requestSpectatorSync(attachment.spectatorId);
 		}
 
 		return new Response(null, { status: 101, webSocket: clientSocket });
@@ -111,12 +156,14 @@ export class FlickRoom extends DurableObject {
 	webSocketMessage(socket: WebSocket, message: string | ArrayBuffer) {
 		const raw =
 			typeof message === "string" ? message : new TextDecoder().decode(message);
-		if (new TextEncoder().encode(raw).byteLength > MAX_MESSAGE_BYTES) {
+		const attachment = this.attachment(socket);
+		if (!attachment) return;
+		const maxBytes =
+			attachment.role === "host" ? MAX_HOST_MESSAGE_BYTES : MAX_MESSAGE_BYTES;
+		if (new TextEncoder().encode(raw).byteLength > maxBytes) {
 			this.send(socket, { type: "error", message: "Message too large." });
 			return;
 		}
-		const attachment = this.attachment(socket);
-		if (!attachment) return;
 
 		if (attachment.role === "controller") {
 			const parsed = parseJsonMessage(raw, ControllerMessageSchema);
@@ -144,12 +191,39 @@ export class FlickRoom extends DurableObject {
 			return;
 		}
 
-		const parsed = parseJsonMessage(raw, HostToRoomMessageSchema);
+		if (attachment.role === "spectator") {
+			const parsed = parseJsonMessage(raw, SpectatorToRoomMessageSchema);
+			if (!parsed) {
+				this.send(socket, {
+					type: "error",
+					message: "Spectator displays are read-only.",
+				});
+				return;
+			}
+			if (parsed.type === "request-sync")
+				this.requestSpectatorSync(attachment.spectatorId);
+			else
+				this.send(socket, {
+					type: "pong",
+					timestamp: parsed.timestamp,
+					serverTimestamp: Date.now(),
+				});
+			return;
+		}
+
+		const parsed = parseJsonMessage(
+			raw,
+			HostToRoomMessageSchema,
+			MAX_HOST_MESSAGE_BYTES,
+		);
 		if (!parsed) {
 			this.send(socket, { type: "error", message: "Invalid host message." });
 			return;
 		}
-		this.relayToControllers(parsed);
+		if (parsed.type === "spectator-snapshot")
+			this.relaySnapshotToSpectators(parsed);
+		else if (parsed.type === "spectator-event") this.relayToSpectators(parsed);
+		else this.relayToControllers(parsed);
 	}
 
 	webSocketClose(socket: WebSocket) {
@@ -157,6 +231,13 @@ export class FlickRoom extends DurableObject {
 		if (attachment?.role === "host") {
 			for (const controller of this.controllerSockets())
 				controller.close(CLOSE_HOST_LEFT, "Host disconnected.");
+			for (const spectator of this.spectatorSockets()) {
+				this.send(spectator, {
+					type: "host-unavailable",
+					message: "Host display disconnected.",
+				});
+				spectator.close(CLOSE_HOST_LEFT, "Host disconnected.");
+			}
 			return;
 		}
 		if (
@@ -168,6 +249,14 @@ export class FlickRoom extends DurableObject {
 				attachment.sessionId,
 				attachment.player.playerId,
 			);
+			return;
+		}
+		if (attachment?.role === "spectator") {
+			this.send(this.socketFor("host"), {
+				type: "spectator-disconnected",
+				spectatorId: attachment.spectatorId,
+			});
+			this.sendSpectatorCount(socket);
 		}
 	}
 
@@ -203,7 +292,9 @@ export class FlickRoom extends DurableObject {
 
 		const occupiedNumbers = new Set<PlayerNumber>();
 		for (const socket of this.controllerSockets()) {
-			const player = this.attachment(socket)?.player;
+			const attachment = this.attachment(socket);
+			const player =
+				attachment?.role === "controller" ? attachment.player : undefined;
 			if (player) occupiedNumbers.add(player.playerNumber);
 		}
 		const sessions = await this.state.storage.list<StoredPlayerSession>({
@@ -276,7 +367,9 @@ export class FlickRoom extends DurableObject {
 		const now = Date.now();
 		const connected = new Map<string, PlayerAssignment>();
 		for (const controller of this.controllerSockets()) {
-			const player = this.attachment(controller)?.player;
+			const attachment = this.attachment(controller);
+			const player =
+				attachment?.role === "controller" ? attachment.player : undefined;
 			if (player) connected.set(player.playerId, player);
 		}
 		const players: LobbyPlayer[] = [];
@@ -318,13 +411,46 @@ export class FlickRoom extends DurableObject {
 		if (message.type === "player-hit")
 			targetPlayerIds.add(message.targetPlayerId);
 		for (const controller of this.controllerSockets()) {
-			const playerId = this.attachment(controller)?.player?.playerId;
+			const attachment = this.attachment(controller);
+			const playerId =
+				attachment?.role === "controller"
+					? attachment.player.playerId
+					: undefined;
 			if (
 				targetPlayerIds.size === 0 ||
 				(playerId && targetPlayerIds.has(playerId))
 			)
 				this.send(controller, message);
 		}
+	}
+
+	private relaySnapshotToSpectators(
+		message: Extract<HostToRoomMessage, { type: "spectator-snapshot" }>,
+	) {
+		if (message.targetSpectatorId) {
+			this.send(this.spectatorSocket(message.targetSpectatorId), message);
+			return;
+		}
+		this.relayToSpectators(message);
+	}
+
+	private relayToSpectators(message: HostToRoomMessage) {
+		for (const spectator of this.spectatorSockets())
+			this.send(spectator, message);
+	}
+
+	private requestSpectatorSync(spectatorId: string) {
+		this.send(this.socketFor("host"), {
+			type: "spectator-sync-request",
+			spectatorId,
+		});
+	}
+
+	private sendSpectatorCount(exclude?: WebSocket) {
+		const count = this.spectatorSockets().filter(
+			(socket) => socket !== exclude && socket.readyState === WebSocket.OPEN,
+		).length;
+		this.send(this.socketFor("host"), { type: "spectator-count", count });
 	}
 
 	private sessionKey(sessionId: string) {
@@ -348,12 +474,31 @@ export class FlickRoom extends DurableObject {
 			);
 	}
 
+	private spectatorSockets() {
+		return this.state
+			.getWebSockets()
+			.filter(
+				(socket: WebSocket) => this.attachment(socket)?.role === "spectator",
+			);
+	}
+
+	private spectatorSocket(spectatorId: string) {
+		return this.spectatorSockets().find((socket) => {
+			const attachment = this.attachment(socket);
+			return (
+				attachment?.role === "spectator" &&
+				attachment.spectatorId === spectatorId
+			);
+		});
+	}
+
 	private socketFor(role: ConnectionAttachment["role"], sessionId?: string) {
 		return this.state.getWebSockets().find((socket: WebSocket) => {
 			const attachment = this.attachment(socket);
+			if (attachment?.role !== role) return false;
+			if (!sessionId) return true;
 			return (
-				attachment?.role === role &&
-				(!sessionId || attachment.sessionId === sessionId)
+				attachment.role === "controller" && attachment.sessionId === sessionId
 			);
 		});
 	}
@@ -368,7 +513,9 @@ export class FlickRoom extends DurableObject {
 		)
 			return null;
 		if (
-			(value.role !== "host" && value.role !== "controller") ||
+			(value.role !== "host" &&
+				value.role !== "controller" &&
+				value.role !== "spectator") ||
 			typeof value.connectedAt !== "number"
 		)
 			return null;

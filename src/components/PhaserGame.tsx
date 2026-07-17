@@ -1,14 +1,17 @@
 import type Phaser from "phaser";
 import { useEffect, useRef } from "react";
 import type { GameBridge } from "../game/bridge/GameBridge";
+import type { GameMode } from "../game/types";
 
 type PhaserGameProps = {
 	bridge: GameBridge;
+	mode?: GameMode;
 	allowSinglePlayer?: boolean;
 };
 
 export function PhaserGame({
 	bridge,
+	mode = "host",
 	allowSinglePlayer = false,
 }: PhaserGameProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
@@ -22,6 +25,7 @@ export function PhaserGame({
 			gameRef.current = createFlickGame({
 				parent: containerRef.current,
 				bridge,
+				mode,
 				allowSinglePlayer,
 			});
 		});
@@ -30,7 +34,7 @@ export function PhaserGame({
 			gameRef.current?.destroy(true);
 			gameRef.current = null;
 		};
-	}, [allowSinglePlayer, bridge]);
+	}, [allowSinglePlayer, bridge, mode]);
 
 	return <div ref={containerRef} className="phaser-game-container" />;
 }

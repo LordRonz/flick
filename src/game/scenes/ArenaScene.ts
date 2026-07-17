@@ -1,4 +1,13 @@
 import Phaser from "phaser";
+import type {
+	SpectatorPresentationEvent,
+	SpectatorSnapshot,
+} from "../../realtime/protocol";
+import {
+	PresentationEventDeduplicator,
+	SnapshotBuffer,
+	SPECTATOR_INTERPOLATION_DELAY_MS,
+} from "../../spectator/sync";
 import { ARCADE_COLORS, ARCADE_MOTION, PLAYER_HEX } from "../art/tokens";
 import { ArcadeAudio, type ArcadeSoundCue } from "../audio/ArcadeAudio";
 import type { GameBridge } from "../bridge/GameBridge";
@@ -21,7 +30,9 @@ import { mapAimAngle, mapThrowSpeed, smoothAim } from "../systems/aim";
 import { clamp } from "../systems/math";
 import { canScoreAgainst, hitScore, propScore } from "../systems/scoring";
 import type {
+	GameMode,
 	MatchPhase,
+	MatchStanding,
 	PlayerAssignment,
 	PlayerRoundStats,
 	ProjectileType,
@@ -90,6 +101,7 @@ type CollisionPair = { bodyA: { label?: string }; bodyB: { label?: string } };
 
 export class ArenaScene extends Phaser.Scene {
 	private readonly bridge: GameBridge;
+	private readonly mode: GameMode;
 	private readonly allowSinglePlayer: boolean;
 	private readonly players = new Map<string, PlayerState>();
 	private readonly projectiles = new Map<string, ProjectileState>();
@@ -101,14 +113,23 @@ export class ArenaScene extends Phaser.Scene {
 	private lastTimerSecond = -1;
 	private countdownEvent?: Phaser.Time.TimerEvent;
 	private countdownText?: Phaser.GameObjects.Text;
+	private countdownValue?: 3 | 2 | 1 | "FLICK";
 	private effects?: ArcadeEffects;
 	private performanceText?: Phaser.GameObjects.Text;
 	private lastPerformanceUpdate = 0;
 	private removeBridgeListener?: () => void;
+	private spectatorCount = 0;
+	private spectatorSequence = 0;
+	private lastSnapshotAt = 0;
+	private finalStandings: MatchStanding[] = [];
+	private readonly spectatorBuffer = new SnapshotBuffer();
+	private readonly spectatorEvents = new PresentationEventDeduplicator();
+	private lastSpectatorDebugAt = 0;
 
-	constructor(bridge: GameBridge, allowSinglePlayer: boolean) {
+	constructor(bridge: GameBridge, mode: GameMode, allowSinglePlayer: boolean) {
 		super({ key: "ArenaScene" });
 		this.bridge = bridge;
+		this.mode = mode;
 		this.allowSinglePlayer = allowSinglePlayer;
 	}
 
@@ -133,13 +154,35 @@ export class ArenaScene extends Phaser.Scene {
 		this.removeBridgeListener = this.bridge.onCommand((command) =>
 			this.handleCommand(command),
 		);
-		this.matter.world.on("collisionstart", this.handleCollision, this);
-		this.input.keyboard?.on("keydown", this.handleKeyboard, this);
+		if (this.mode === "host") {
+			this.matter.world.on("collisionstart", this.handleCollision, this);
+			this.input.keyboard?.on("keydown", this.handleKeyboard, this);
+		} else {
+			this.matter.world.pause();
+		}
 		this.events.once("shutdown", this.shutdown, this);
 		this.bridge.emit({ type: "game-ready" });
 	}
 
 	update() {
+		if (this.mode === "spectator") {
+			const snapshot = this.spectatorBuffer.sample(
+				Date.now() - SPECTATOR_INTERPOLATION_DELAY_MS,
+			);
+			if (snapshot) this.renderSpectatorSnapshot(snapshot);
+			if (
+				import.meta.env.DEV &&
+				this.time.now - this.lastSpectatorDebugAt >= 500
+			) {
+				this.lastSpectatorDebugAt = this.time.now;
+				this.bridge.emit({
+					type: "spectator-debug",
+					lastSequence: this.spectatorBuffer.latestSequence,
+					bufferSize: this.spectatorBuffer.size,
+				});
+			}
+			return;
+		}
 		if (this.phase === "playing") {
 			this.clearCountdown();
 			this.updateTimer();
@@ -188,6 +231,15 @@ export class ArenaScene extends Phaser.Scene {
 			this.performanceText.setText(
 				`FPS ${Math.round(this.game.loop.actualFps)}\nPROJECTILES ${this.projectiles.size}/${MAX_ACTIVE_PROJECTILES}\nBODIES ${this.matter.world.getAllBodies().length}`,
 			);
+		}
+		const snapshotInterval =
+			this.phase === "playing" || this.phase === "countdown" ? 1000 / 15 : 500;
+		if (
+			this.spectatorCount > 0 &&
+			now - this.lastSnapshotAt >= snapshotInterval
+		) {
+			this.lastSnapshotAt = now;
+			this.emitSpectatorSnapshot();
 		}
 	}
 
@@ -441,13 +493,41 @@ export class ArenaScene extends Phaser.Scene {
 				this.startMatch();
 				break;
 			case "set-muted":
-				this.audio.setMuted(command.muted);
+				this.audio.setMuted(command.muted, command.persist);
+				break;
+			case "unlock-audio":
+				this.audio.unlock();
 				break;
 			case "set-audio-levels":
 				this.audio.setLevels(command.levels);
 				break;
 			case "reset-match":
 				this.resetMatch();
+				break;
+			case "set-spectator-count":
+				this.spectatorCount = Math.max(0, command.count);
+				if (this.spectatorCount > 0) this.emitSpectatorSnapshot();
+				break;
+			case "request-spectator-snapshot":
+				if (this.mode === "host")
+					this.emitSpectatorSnapshot(command.spectatorId);
+				break;
+			case "reset-spectator-sync":
+				if (this.mode === "spectator") {
+					this.spectatorBuffer.clear();
+					this.spectatorEvents.clear();
+				}
+				break;
+			case "apply-spectator-snapshot":
+				if (this.mode === "spectator")
+					this.spectatorBuffer.push(command.snapshot);
+				break;
+			case "apply-spectator-event":
+				if (
+					this.mode === "spectator" &&
+					this.spectatorEvents.accept(command.event)
+				)
+					this.playSpectatorPresentation(command.event);
 				break;
 		}
 	}
@@ -512,7 +592,7 @@ export class ArenaScene extends Phaser.Scene {
 		};
 		this.players.set(assignment.playerId, player);
 		this.setPlayerLabel(assignment.playerId, "BUTTON THROW");
-		if (!this.reducedMotion)
+		if (!this.reducedMotion && this.mode === "host")
 			this.tweens.add({
 				targets: sprite,
 				y: station.y - 5,
@@ -609,6 +689,7 @@ export class ArenaScene extends Phaser.Scene {
 	}
 
 	private clearCountdown() {
+		this.countdownValue = undefined;
 		const countdown = this.countdownText;
 		this.countdownText = undefined;
 		const countdowns = this.children.list.filter(
@@ -626,7 +707,15 @@ export class ArenaScene extends Phaser.Scene {
 	}
 
 	private showCountdown(label: string) {
+		this.countdownValue =
+			label === "FLICK!" ? "FLICK" : (Number(label) as 3 | 2 | 1);
 		this.audio.play(label === "FLICK!" ? "round-start" : "countdown");
+		if (this.mode === "host")
+			this.emitSpectatorPresentation({
+				type: "countdown",
+				eventId: crypto.randomUUID(),
+				value: label === "FLICK!" ? "FLICK" : (Number(label) as 3 | 2 | 1),
+			});
 		if (!this.countdownText) {
 			this.countdownText = this.add
 				.text(GAME_WIDTH / 2, GAME_HEIGHT / 2, label, {
@@ -781,6 +870,15 @@ export class ArenaScene extends Phaser.Scene {
 				projectileType,
 				source,
 			});
+			if (isUuid(playerId))
+				this.emitSpectatorPresentation({
+					type: "projectile-thrown",
+					eventId: crypto.randomUUID(),
+					playerId,
+					projectileId,
+					projectileType,
+					intensity: clamp(intensity, 0, 1),
+				});
 			this.bridge.emit({
 				type: "stats-changed",
 				playerId,
@@ -873,6 +971,21 @@ export class ArenaScene extends Phaser.Scene {
 			targetPlayerId,
 			score,
 		});
+		if (isUuid(attacker.assignment.playerId) && isUuid(targetPlayerId))
+			this.emitSpectatorPresentation({
+				type: "player-hit",
+				eventId: crypto.randomUUID(),
+				attackerPlayerId: attacker.assignment.playerId,
+				targetPlayerId,
+				projectileType: projectile.metadata.projectileType,
+				score,
+				impactX: target.sprite.x,
+				impactY: target.sprite.y,
+				impactStrength: Math.hypot(
+					projectile.body.body?.velocity.x ?? 0,
+					projectile.body.body?.velocity.y ?? 0,
+				),
+			});
 		this.effects?.impact(
 			target.sprite.x,
 			target.sprite.y,
@@ -919,6 +1032,14 @@ export class ArenaScene extends Phaser.Scene {
 		this.audio.play(
 			PROJECTILE_AUDIO[projectile.metadata.projectileType].impact,
 		);
+		this.emitSpectatorPresentation({
+			type: "prop-damaged",
+			eventId: crypto.randomUUID(),
+			propId,
+			propType: prop.type,
+			impactX: prop.body.x,
+			impactY: prop.body.y,
+		});
 		prop.body.setTint(0xffb070);
 		prop.body.setTexture(`${definition.textureKey}-damaged`);
 		this.tweens.add({
@@ -946,6 +1067,17 @@ export class ArenaScene extends Phaser.Scene {
 				propType: prop.type,
 				score,
 			});
+			if (isUuid(attacker.assignment.playerId))
+				this.emitSpectatorPresentation({
+					type: "prop-destroyed",
+					eventId: crypto.randomUUID(),
+					playerId: attacker.assignment.playerId,
+					propId,
+					propType: prop.type,
+					score,
+					impactX: prop.body.x,
+					impactY: prop.body.y,
+				});
 			this.effects?.score(
 				prop.body.x,
 				prop.body.y - 36,
@@ -1015,6 +1147,7 @@ export class ArenaScene extends Phaser.Scene {
 		this.phase = "lobby";
 		this.matchEndsAt = 0;
 		this.lastTimerSecond = -1;
+		this.finalStandings = [];
 		this.countdownText?.setVisible(false);
 		this.bridge.emit({ type: "phase-changed", phase: this.phase });
 		this.bridge.emit({ type: "timer-changed", timeRemainingMs: 0 });
@@ -1035,9 +1168,18 @@ export class ArenaScene extends Phaser.Scene {
 				...player.stats,
 				rank: index + 1,
 			}));
+		this.finalStandings = standings;
 		this.bridge.emit({ type: "phase-changed", phase: this.phase });
 		this.bridge.emit({ type: "timer-changed", timeRemainingMs: 0 });
 		this.bridge.emit({ type: "match-ended", standings });
+		const networkStandings = standings.filter((standing) =>
+			isUuid(standing.playerId),
+		);
+		this.emitSpectatorPresentation({
+			type: "match-ended",
+			eventId: crypto.randomUUID(),
+			standings: networkStandings,
+		});
 		this.audio.play("round-end");
 		this.time.delayedCall(180, () => this.audio.play("winner"));
 		const winner = this.players.get(standings[0]?.playerId ?? "");
@@ -1114,6 +1256,282 @@ export class ArenaScene extends Phaser.Scene {
 			this.launchForPlayer(player.assignment.playerId, 0.78, "button");
 	}
 
+	private emitSpectatorSnapshot(targetSpectatorId?: string) {
+		if (
+			this.mode !== "host" ||
+			(this.spectatorCount === 0 && !targetSpectatorId)
+		)
+			return;
+		const snapshot = this.createSpectatorSnapshot(targetSpectatorId);
+		this.bridge.emit({
+			type: "spectator-snapshot",
+			snapshot,
+			...(targetSpectatorId ? { targetSpectatorId } : {}),
+		});
+	}
+
+	private createSpectatorSnapshot(
+		targetSpectatorId?: string,
+	): SpectatorSnapshot {
+		const timeRemainingMs =
+			this.phase === "playing"
+				? Math.max(0, this.matchEndsAt - this.time.now)
+				: 0;
+		const standings = this.finalStandings.filter((standing) =>
+			isUuid(standing.playerId),
+		);
+		return {
+			type: "spectator-snapshot",
+			sequence: this.spectatorSequence++,
+			hostTimestamp: Date.now(),
+			phase: this.phase,
+			timeRemainingMs,
+			...(this.countdownValue !== undefined
+				? { countdownValue: this.countdownValue }
+				: {}),
+			players: Array.from(this.players.values())
+				.filter((player) => isUuid(player.assignment.playerId))
+				.map((player) => {
+					const cooldownRemainingMs = Math.max(
+						0,
+						player.cooldownUntil - this.time.now,
+					);
+					const standing = standings.find(
+						(candidate) => candidate.playerId === player.assignment.playerId,
+					);
+					return {
+						...player.assignment,
+						stationId: `station-${player.assignment.playerNumber}`,
+						x: player.sprite.x,
+						y: player.sprite.y,
+						rotation: player.sprite.rotation,
+						aimAngle: player.angle,
+						cooldownRemainingMs,
+						animationState:
+							this.phase === "results"
+								? standing?.rank === 1
+									? ("winning" as const)
+									: ("losing" as const)
+								: cooldownRemainingMs > 0
+									? ("throwing" as const)
+									: player.aimActiveUntil > this.time.now
+										? ("aiming" as const)
+										: ("idle" as const),
+						ready: player.ready,
+					};
+				}),
+			projectiles: Array.from(this.projectiles.values())
+				.filter(
+					(projectile) =>
+						isUuid(projectile.metadata.projectileId) &&
+						isUuid(projectile.metadata.ownerPlayerId),
+				)
+				.map((projectile) => ({
+					projectileId: projectile.metadata.projectileId,
+					ownerPlayerId: projectile.metadata.ownerPlayerId,
+					projectileType: projectile.metadata.projectileType,
+					x: projectile.body.x,
+					y: projectile.body.y,
+					rotation: projectile.body.rotation,
+					velocityX: projectile.body.body?.velocity.x ?? 0,
+					velocityY: projectile.body.body?.velocity.y ?? 0,
+				})),
+			props: Array.from(this.props.values()).map((prop) => {
+				const maxHealth = PROP_DEFINITIONS[prop.type].maxHealth;
+				return {
+					propId: prop.propId,
+					propType: prop.type,
+					x: prop.body.x,
+					y: prop.body.y,
+					rotation: prop.body.rotation,
+					health: Math.max(0, prop.health),
+					maxHealth,
+					destroyed: prop.destroyed,
+					damageState: prop.destroyed
+						? 3
+						: Math.min(2, Math.max(0, maxHealth - prop.health)),
+				};
+			}),
+			scores: Array.from(this.players.values())
+				.filter((player) => isUuid(player.assignment.playerId))
+				.map((player) => ({
+					playerId: player.assignment.playerId,
+					score: player.stats.score,
+				})),
+			...(standings.length > 0 ? { standings } : {}),
+			...(targetSpectatorId ? { targetSpectatorId } : {}),
+		};
+	}
+
+	private renderSpectatorSnapshot(snapshot: SpectatorSnapshot) {
+		if (this.mode !== "spectator") return;
+		this.phase = snapshot.phase;
+		if (this.phase === "playing") this.clearCountdown();
+		if (
+			this.phase === "countdown" &&
+			snapshot.countdownValue !== undefined &&
+			snapshot.countdownValue !== this.countdownValue
+		)
+			this.showCountdown(
+				snapshot.countdownValue === "FLICK"
+					? "FLICK!"
+					: String(snapshot.countdownValue),
+			);
+		this.finalStandings = snapshot.standings ?? [];
+		const playerIds = new Set(
+			snapshot.players.map((player) => player.playerId),
+		);
+		for (const playerId of this.players.keys())
+			if (!playerIds.has(playerId)) this.removePlayer(playerId);
+		const scores = new Map(
+			snapshot.scores.map((score) => [score.playerId, score.score]),
+		);
+		for (const state of snapshot.players) {
+			if (!this.players.has(state.playerId)) this.createPlayer(state);
+			const player = this.players.get(state.playerId);
+			if (!player) continue;
+			player.sprite.setPosition(state.x, state.y).setRotation(state.rotation);
+			player.angle = state.aimAngle;
+			player.cooldownUntil = this.time.now + state.cooldownRemainingMs;
+			player.ready = state.ready;
+			player.aimActiveUntil =
+				state.animationState === "aiming" ? this.time.now + 250 : 0;
+			player.label.setText(
+				`P${state.playerNumber}  ${state.ready ? "READY" : state.color.toUpperCase()}`,
+			);
+			player.projectileLabel.setText(
+				`SCORE ${(scores.get(state.playerId) ?? 0).toString().padStart(3, "0")}`,
+			);
+			this.drawAim(player);
+		}
+
+		const projectileIds = new Set(
+			snapshot.projectiles.map((projectile) => projectile.projectileId),
+		);
+		for (const projectileId of this.projectiles.keys())
+			if (!projectileIds.has(projectileId))
+				this.destroyProjectile(projectileId);
+		for (const state of snapshot.projectiles) {
+			if (!this.projectiles.has(state.projectileId))
+				this.createSpectatorProjectile(state);
+			this.projectiles
+				.get(state.projectileId)
+				?.body.setPosition(state.x, state.y)
+				.setRotation(state.rotation);
+		}
+
+		for (const state of snapshot.props) {
+			const prop = this.props.get(state.propId);
+			if (!prop) continue;
+			prop.health = state.health;
+			prop.destroyed = state.destroyed;
+			prop.body
+				.setPosition(state.x, state.y)
+				.setRotation(state.rotation)
+				.setTexture(
+					state.destroyed
+						? `${PROP_DEFINITIONS[state.propType].textureKey}-broken`
+						: state.damageState > 0
+							? `${PROP_DEFINITIONS[state.propType].textureKey}-damaged`
+							: PROP_DEFINITIONS[state.propType].textureKey,
+				)
+				.setVisible(true);
+		}
+	}
+
+	private createSpectatorProjectile(
+		state: SpectatorSnapshot["projectiles"][number],
+	) {
+		const definition = PROJECTILE_DEFINITIONS[state.projectileType];
+		const body = this.matter.add
+			.image(state.x, state.y, definition.textureKey, undefined, {
+				label: `spectator-projectile:${state.projectileId}`,
+				isStatic: true,
+				isSensor: true,
+				collisionFilter: { category: 0, mask: 0 },
+			})
+			.setDepth(5)
+			.setRotation(state.rotation);
+		this.projectiles.set(state.projectileId, {
+			body,
+			metadata: {
+				projectileId: state.projectileId,
+				ownerPlayerId: state.ownerPlayerId,
+				projectileType: state.projectileType,
+				practice: false,
+				createdAt: this.time.now,
+				scoredPlayerIds: new Set(),
+				destroyedPropIds: new Set(),
+				lastWorldImpactAt: 0,
+			},
+		});
+	}
+
+	private emitSpectatorPresentation(event: SpectatorPresentationEvent) {
+		if (this.mode !== "host" || this.spectatorCount === 0) return;
+		this.bridge.emit({ type: "spectator-presentation", event });
+	}
+
+	private playSpectatorPresentation(event: SpectatorPresentationEvent) {
+		switch (event.type) {
+			case "projectile-thrown":
+				this.audio.play(PROJECTILE_AUDIO[event.projectileType].throw);
+				break;
+			case "player-hit": {
+				this.audio.play(PROJECTILE_AUDIO[event.projectileType].impact);
+				this.audio.play("player-hit");
+				const target = this.players.get(event.targetPlayerId);
+				this.effects?.impact(
+					event.impactX,
+					event.impactY,
+					event.projectileType === "stapler",
+					target ? PLAYER_HEX[target.assignment.color] : ARCADE_COLORS.white,
+				);
+				this.effects?.score(
+					event.impactX,
+					event.impactY - 42,
+					event.score,
+					ARCADE_COLORS.white,
+				);
+				if (target) {
+					target.sprite.setTint(0xffffff);
+					this.time.delayedCall(160, () => target.sprite.clearTint());
+				}
+				break;
+			}
+			case "prop-damaged":
+				this.audio.play("medium-impact");
+				this.effects?.particles(
+					"dot",
+					event.impactX,
+					event.impactY,
+					7,
+					0xffb070,
+				);
+				break;
+			case "prop-destroyed":
+				this.audio.play(`${event.propType}-break`);
+				this.effects?.destroyProp(event.propType, event.impactX, event.impactY);
+				this.effects?.score(
+					event.impactX,
+					event.impactY - 36,
+					event.score,
+					ARCADE_COLORS.white,
+				);
+				break;
+			case "countdown":
+				this.showCountdown(
+					event.value === "FLICK" ? "FLICK!" : String(event.value),
+				);
+				break;
+			case "match-ended":
+				this.audio.play("round-end");
+				this.time.delayedCall(180, () => this.audio.play("winner"));
+				if (!this.reducedMotion) this.effects?.confetti();
+				break;
+		}
+	}
+
 	private shutdown() {
 		this.removeBridgeListener?.();
 		this.matter.world.off("collisionstart", this.handleCollision, this);
@@ -1131,4 +1549,10 @@ function projectileName(type: ProjectileType) {
 	if (type === "paper-ball") return "PAPER";
 	if (type === "coffee-mug") return "MUG";
 	return "STAPLER";
+}
+
+function isUuid(value: string) {
+	return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+		value,
+	);
 }

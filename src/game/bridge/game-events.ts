@@ -1,3 +1,7 @@
+import type {
+	SpectatorPresentationEvent,
+	SpectatorSnapshot,
+} from "../../realtime/protocol";
 import type { AudioLevels } from "../audio/ArcadeAudio";
 import type { FlickSource } from "../config/controls";
 import type {
@@ -22,9 +26,18 @@ export type ReactToGameEvent =
 			source: FlickSource;
 	  }
 	| { type: "start-match" }
-	| { type: "set-muted"; muted: boolean }
+	| { type: "set-muted"; muted: boolean; persist?: boolean }
+	| { type: "unlock-audio" }
 	| { type: "set-audio-levels"; levels: AudioLevels }
-	| { type: "reset-match" };
+	| { type: "reset-match" }
+	| { type: "set-spectator-count"; count: number }
+	| { type: "request-spectator-snapshot"; spectatorId: string }
+	| { type: "reset-spectator-sync" }
+	| { type: "apply-spectator-snapshot"; snapshot: SpectatorSnapshot }
+	| {
+			type: "apply-spectator-event";
+			event: SpectatorPresentationEvent;
+	  };
 
 export type GameToReactEvent =
 	| { type: "game-ready" }
@@ -56,4 +69,18 @@ export type GameToReactEvent =
 			projectileType: ProjectileType;
 			source: FlickSource;
 	  }
-	| { type: "match-ended"; standings: MatchStanding[] };
+	| { type: "match-ended"; standings: MatchStanding[] }
+	| {
+			type: "spectator-snapshot";
+			snapshot: SpectatorSnapshot;
+			targetSpectatorId?: string;
+	  }
+	| {
+			type: "spectator-presentation";
+			event: SpectatorPresentationEvent;
+	  }
+	| {
+			type: "spectator-debug";
+			lastSequence: number;
+			bufferSize: number;
+	  };

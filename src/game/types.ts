@@ -1,5 +1,6 @@
 export const PLAYER_COLORS = ["blue", "red", "green", "yellow"] as const;
 
+export type GameMode = "host" | "spectator";
 export type PlayerColor = (typeof PLAYER_COLORS)[number];
 export type PlayerNumber = 1 | 2 | 3 | 4;
 

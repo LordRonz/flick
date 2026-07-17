@@ -3,6 +3,8 @@ import {
 	ControllerMessageSchema,
 	HostMessageSchema,
 	parseJsonMessage,
+	SpectatorSnapshotSchema,
+	SpectatorToRoomMessageSchema,
 } from "./protocol";
 
 describe("realtime protocol", () => {
@@ -64,5 +66,38 @@ describe("realtime protocol", () => {
 				HostMessageSchema,
 			)?.type,
 		).toBe("assignment");
+	});
+
+	it("allows only sync and ping messages from spectators", () => {
+		expect(
+			parseJsonMessage('{"type":"request-sync"}', SpectatorToRoomMessageSchema),
+		).toEqual({ type: "request-sync" });
+		expect(
+			parseJsonMessage(
+				'{"type":"aim","normalizedAim":0.5,"timestamp":1}',
+				SpectatorToRoomMessageSchema,
+			),
+		).toBeNull();
+	});
+
+	it("validates complete spectator snapshots", () => {
+		const snapshot = {
+			type: "spectator-snapshot",
+			sequence: 2,
+			hostTimestamp: 10,
+			phase: "playing",
+			timeRemainingMs: 42_000,
+			players: [],
+			projectiles: [],
+			props: [],
+			scores: [],
+		};
+		expect(SpectatorSnapshotSchema.safeParse(snapshot).success).toBe(true);
+		expect(
+			SpectatorSnapshotSchema.safeParse({
+				...snapshot,
+				sequence: -1,
+			}).success,
+		).toBe(false);
 	});
 });

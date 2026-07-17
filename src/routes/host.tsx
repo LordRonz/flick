@@ -23,6 +23,7 @@ import {
 	createSocketUrl,
 	sendSocketMessage,
 } from "../realtime/websocket-client";
+import { createSpectatorUrl } from "../spectator/link";
 
 export const Route = createFileRoute("/host")({
 	validateSearch: z.object({ room: z.string().catch("") }),
@@ -62,6 +63,11 @@ function HostPage() {
 	const [timeRemainingMs, setTimeRemainingMs] = useState(0);
 	const [standings, setStandings] = useState<MatchStanding[]>([]);
 	const [qrData, setQrData] = useState("");
+	const [spectatorQrData, setSpectatorQrData] = useState("");
+	const [spectatorUrl, setSpectatorUrl] = useState("");
+	const [spectatorCount, setSpectatorCount] = useState(0);
+	const [spectatorQrOpen, setSpectatorQrOpen] = useState(false);
+	const [spectatorFeedback, setSpectatorFeedback] = useState("");
 	const [muted, setMuted] = useState(false);
 	const [reconnectAttempt, setReconnectAttempt] = useState(0);
 	const [audioLevels, setAudioLevels] = useState<AudioLevels>({
@@ -74,6 +80,8 @@ function HostPage() {
 		let active = true;
 		let retryTimer: number | undefined;
 		const controllerUrl = `${window.location.origin}/controller?room=${encodeURIComponent(room)}`;
+		const nextSpectatorUrl = createSpectatorUrl(window.location.origin, room);
+		setSpectatorUrl(nextSpectatorUrl);
 		void QRCode.toDataURL(controllerUrl, {
 			width: 180,
 			margin: 1,
@@ -81,6 +89,13 @@ function HostPage() {
 		})
 			.then(setQrData)
 			.catch(() => setQrData(""));
+		void QRCode.toDataURL(nextSpectatorUrl, {
+			width: 180,
+			margin: 1,
+			color: { dark: "#172033", light: "#fffaf0" },
+		})
+			.then(setSpectatorQrData)
+			.catch(() => setSpectatorQrData(""));
 		const socket = new WebSocket(
 			createSocketUrl(`/api/rooms/${room}/socket`, { role: "host" }),
 		);
@@ -179,6 +194,17 @@ function HostPage() {
 						source: input.source,
 					});
 				}
+			} else if (message.type === "spectator-count") {
+				setSpectatorCount(message.count);
+				bridgeRef.current.send({
+					type: "set-spectator-count",
+					count: message.count,
+				});
+			} else if (message.type === "spectator-sync-request") {
+				bridgeRef.current.send({
+					type: "request-spectator-snapshot",
+					spectatorId: message.spectatorId,
+				});
 			}
 		};
 		socket.onclose = () => {
@@ -291,6 +317,25 @@ function HostPage() {
 			intensity: 0.8,
 			source: "button",
 		});
+	}
+
+	async function copySpectatorLink() {
+		if (!spectatorUrl) return;
+		try {
+			if (navigator.clipboard?.writeText)
+				await navigator.clipboard.writeText(spectatorUrl);
+			else if (!copyTextFallback(spectatorUrl)) throw new Error("copy failed");
+			setSpectatorFeedback("Spectator link copied");
+		} catch {
+			setSpectatorFeedback("Could not copy spectator link");
+			playUiCue("ui-error");
+		}
+		window.setTimeout(() => setSpectatorFeedback(""), 2200);
+	}
+
+	function openSpectatorDisplay() {
+		if (!spectatorUrl) return;
+		window.open(spectatorUrl, "_blank", "noopener,noreferrer");
 	}
 
 	if (!room) return <EmptyRoom />;
@@ -408,6 +453,7 @@ function HostPage() {
 						</span>
 					</div>
 					<div className="qr-wrap">
+						<strong className="qr-label">Controller QR</strong>
 						{qrData ? (
 							<img src={qrData} alt={`QR code to join room ${room}`} />
 						) : (
@@ -426,6 +472,11 @@ function HostPage() {
 							label="PHASE"
 							value={phase.toUpperCase()}
 							active={phase === "playing"}
+						/>
+						<StatusRow
+							label="SPECTATOR DISPLAYS"
+							value={spectatorCount.toString()}
+							active={spectatorCount > 0}
 						/>
 					</div>
 					<div className="lobby-players">
@@ -468,6 +519,65 @@ function HostPage() {
 							</button>
 						) : null}
 					</div>
+					<section
+						className="spectator-share"
+						aria-labelledby="spectator-title"
+					>
+						<div className="spectator-share-heading">
+							<div>
+								<span className="panel-label">PUBLIC SCREEN</span>
+								<h2 id="spectator-title">Spectator Display</h2>
+							</div>
+							<strong>{spectatorCount}</strong>
+						</div>
+						<p>
+							Open this read-only view on a television, projector, or second
+							laptop.
+						</p>
+						<div className="spectator-share-actions">
+							<button
+								className="secondary-host-button"
+								type="button"
+								onClick={copySpectatorLink}
+								aria-label="Copy Spectator Link"
+							>
+								Copy Spectator Link
+							</button>
+							<button
+								className="secondary-host-button"
+								type="button"
+								onClick={openSpectatorDisplay}
+								aria-label="Open Spectator Display in a new tab"
+							>
+								Open Spectator Display
+							</button>
+							<button
+								className="secondary-host-button"
+								type="button"
+								onClick={() => setSpectatorQrOpen((open) => !open)}
+								aria-expanded={spectatorQrOpen}
+								aria-controls="spectator-qr"
+							>
+								{spectatorQrOpen ? "Hide Spectator QR" : "Show Spectator QR"}
+							</button>
+						</div>
+						<output className="spectator-feedback" aria-live="polite">
+							{spectatorFeedback}
+						</output>
+						{spectatorQrOpen ? (
+							<div className="spectator-qr" id="spectator-qr">
+								<strong>Spectator QR</strong>
+								{spectatorQrData ? (
+									<img
+										src={spectatorQrData}
+										alt={`Spectator QR code for room ${room}`}
+									/>
+								) : (
+									<div className="qr-fallback">QR</div>
+								)}
+							</div>
+						) : null}
+					</section>
 					<details className="audio-settings">
 						<summary>Audio mix</summary>
 						{(["master", "music", "effects"] as const).map((key) => (
@@ -501,7 +611,14 @@ function handleGameEvent(
 	setScores: Dispatch<SetStateAction<Record<string, number>>>,
 	setStandings: (value: MatchStanding[]) => void,
 ) {
-	if (event.type === "phase-changed") {
+	if (event.type === "spectator-snapshot") {
+		sendSocketMessage(socketRef.current, event.snapshot);
+	} else if (event.type === "spectator-presentation") {
+		sendSocketMessage(socketRef.current, {
+			type: "spectator-event",
+			event: event.event,
+		});
+	} else if (event.type === "phase-changed") {
 		setPhase(event.phase);
 		sendSocketMessage(socketRef.current, {
 			type: "match-state",
@@ -575,6 +692,21 @@ function isUuid(value: string) {
 	return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
 		value,
 	);
+}
+
+function copyTextFallback(value: string) {
+	const input = document.createElement("textarea");
+	input.value = value;
+	input.setAttribute("readonly", "");
+	input.style.position = "fixed";
+	input.style.opacity = "0";
+	document.body.appendChild(input);
+	input.select();
+	try {
+		return document.execCommand("copy");
+	} finally {
+		input.remove();
+	}
 }
 
 function ScoreCard({ player, score }: { player: LobbyPlayer; score: number }) {

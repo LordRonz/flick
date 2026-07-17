@@ -169,9 +169,9 @@ export class ArcadeAudio {
 			);
 	}
 
-	setMuted(muted: boolean) {
+	setMuted(muted: boolean, persist = true) {
 		this.muted = muted;
-		this.persistPreferences();
+		if (persist) this.persistPreferences();
 		if (muted) {
 			for (const pool of this.pools.values())
 				for (const sound of pool) sound.pause();
