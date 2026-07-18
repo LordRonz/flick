@@ -75,8 +75,13 @@ export class FlickRoom extends DurableObject {
 			return new Response("Role must be host, controller, or spectator.", {
 				status: 400,
 			});
-		if (role === "host" && this.socketFor("host"))
-			return new Response("host is already connected.", { status: 409 });
+		if (role === "host") {
+			// A host that dropped without a close frame (network loss) leaves a
+			// zombie socket behind; evict it so the reconnecting host can take
+			// over instead of hammering 409s until TCP times out.
+			const existingHost = this.socketFor("host");
+			existingHost?.close(4003, "Host reconnected elsewhere.");
+		}
 		if (
 			(role === "controller" || role === "spectator") &&
 			!this.socketFor("host")
@@ -95,10 +100,10 @@ export class FlickRoom extends DurableObject {
 
 		if (role === "controller") {
 			const sessionId = this.sessionId(url.searchParams.get("sessionId"));
-			if (this.socketFor("controller", sessionId))
-				return new Response("Controller session is already connected.", {
-					status: 409,
-				});
+			// Same-session reconnects (page reload after a network drop) must
+			// replace the old zombie socket, not be rejected because of it.
+			const existingController = this.socketFor("controller", sessionId);
+			existingController?.close(4002, "Session reconnected elsewhere.");
 			const assignment = await this.assignmentForSession(sessionId);
 			if (!assignment)
 				return new Response("Four controllers are already connected.", {
@@ -226,11 +231,20 @@ export class FlickRoom extends DurableObject {
 		else this.relayToControllers(parsed);
 	}
 
-	webSocketClose(socket: WebSocket) {
+	async webSocketClose(socket: WebSocket) {
 		const attachment = this.attachment(socket);
 		if (attachment?.role === "host") {
-			for (const controller of this.controllerSockets())
+			for (const controller of this.controllerSockets()) {
+				// Server-initiated closes never re-enter webSocketClose, so mark
+				// the sessions disconnected here or their slots leak forever.
+				const controllerAttachment = this.attachment(controller);
+				if (controllerAttachment?.role === "controller")
+					await this.persistDisconnect(
+						controllerAttachment.sessionId,
+						controllerAttachment.player.playerId,
+					);
 				controller.close(CLOSE_HOST_LEFT, "Host disconnected.");
+			}
 			for (const spectator of this.spectatorSockets()) {
 				this.send(spectator, {
 					type: "host-unavailable",
@@ -261,7 +275,7 @@ export class FlickRoom extends DurableObject {
 	}
 
 	webSocketError(socket: WebSocket) {
-		this.webSocketClose(socket);
+		void this.webSocketClose(socket);
 	}
 
 	private async initialize() {
@@ -459,10 +473,12 @@ export class FlickRoom extends DurableObject {
 
 	private acceptFreshInput(sessionId: string, input: ControllerMessage) {
 		if (input.type !== "aim" && input.type !== "flick") return true;
-		const now = Date.now();
-		const previous = this.lastControllerTimestamps.get(sessionId);
-		if (!isFreshInputTimestamp(input.timestamp, now, previous)) return false;
-		this.lastControllerTimestamps.set(sessionId, input.timestamp);
+		// Keyed per message type so a flick landing in the same millisecond as
+		// an aim update is not rejected as a replay.
+		const key = `${sessionId}:${input.type}`;
+		const previous = this.lastControllerTimestamps.get(key);
+		if (!isFreshInputTimestamp(input.timestamp, previous)) return false;
+		this.lastControllerTimestamps.set(key, input.timestamp);
 		return true;
 	}
 

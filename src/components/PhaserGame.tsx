@@ -20,15 +20,19 @@ export function PhaserGame({
 	useEffect(() => {
 		if (!containerRef.current || gameRef.current) return;
 		let cancelled = false;
-		void import("../game/FlickGame").then(({ createFlickGame }) => {
-			if (cancelled || !containerRef.current) return;
-			gameRef.current = createFlickGame({
-				parent: containerRef.current,
-				bridge,
-				mode,
-				allowSinglePlayer,
+		void import("../game/FlickGame")
+			.then(({ createFlickGame }) => {
+				if (cancelled || !containerRef.current) return;
+				gameRef.current = createFlickGame({
+					parent: containerRef.current,
+					bridge,
+					mode,
+					allowSinglePlayer,
+				});
+			})
+			.catch((error) => {
+				console.error("Failed to load the game engine", error);
 			});
-		});
 		return () => {
 			cancelled = true;
 			gameRef.current?.destroy(true);

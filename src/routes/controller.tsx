@@ -19,6 +19,9 @@ import {
 	FLICK_SENSITIVITY_CONFIG,
 	type FlickSensitivity,
 	forwardAccelerationMagnitude,
+	type GravityFilterState,
+	INITIAL_GRAVITY_FILTER,
+	removeGravity,
 } from "../controller/flick-detector";
 import {
 	createScreenWakeLock,
@@ -51,10 +54,7 @@ export const Route = createFileRoute("/controller")({
 });
 
 type PermissionState = "Not enabled" | "Enabled" | "Denied" | "Unsupported";
-type TutorialStep = "aim" | "throw" | "ready" | "complete";
 type ThrowSource = FlickSource;
-
-const TUTORIAL_STORAGE_KEY = "flick-tutorial-complete:v1";
 
 function ControllerPage() {
 	const { room } = Route.useSearch();
@@ -66,6 +66,7 @@ function ControllerPage() {
 		null,
 	);
 	const detectorRef = useRef({ lastFlickAt: -Infinity });
+	const gravityFilterRef = useRef<GravityFilterState>(INITIAL_GRAVITY_FILTER);
 	const aimSurfaceRef = useRef<HTMLDivElement | null>(null);
 	const activePointerIdRef = useRef<number | null>(null);
 	const aimRef = useRef(0);
@@ -73,10 +74,8 @@ function ControllerPage() {
 		lastSentValue: 0,
 		lastSentAt: -Infinity,
 	});
-	const aimRangeRef = useRef({ min: 0, max: 0 });
 	const cooldownRef = useRef(0);
 	const phaseRef = useRef<MatchPhase>("lobby");
-	const tutorialStepRef = useRef<TutorialStep>("aim");
 	const sensitivityRef = useRef<FlickSensitivity>("normal");
 	const confirmationTimerRef = useRef<number | undefined>(undefined);
 	const motionEventCountRef = useRef(0);
@@ -84,6 +83,8 @@ function ControllerPage() {
 	const aimMessageTimesRef = useRef<number[]>([]);
 
 	const [connection, setConnection] = useState("Connecting");
+	const [reconnectAttempt, setReconnectAttempt] = useState(0);
+	const backoffRef = useRef(0);
 	const [permission, setPermission] = useState<PermissionState>("Not enabled");
 	const [assignment, setAssignment] = useState<PlayerAssignment | null>(null);
 	const [players, setPlayers] = useState<LobbyPlayer[]>([]);
@@ -104,9 +105,9 @@ function ControllerPage() {
 	const [nextProjectile, setNextProjectile] =
 		useState<ProjectileType>("paper-ball");
 	const [cooldownMs, setCooldownMs] = useState(0);
+	const [cooldownEndsAt, setCooldownEndsAt] = useState(0);
 	const [confirmation, setConfirmation] = useState("");
 	const [ready, setReady] = useState(false);
-	const [tutorialStep, setTutorialStep] = useState<TutorialStep>("aim");
 	const [sensitivity, setSensitivity] = useState<FlickSensitivity>("normal");
 	const [debugOpen, setDebugOpen] = useState(false);
 	const [error, setError] = useState("");
@@ -117,14 +118,7 @@ function ControllerPage() {
 	);
 
 	phaseRef.current = phase;
-	tutorialStepRef.current = tutorialStep;
 	sensitivityRef.current = sensitivity;
-
-	useEffect(() => {
-		const nextStep = readTutorialComplete() ? "complete" : "aim";
-		tutorialStepRef.current = nextStep;
-		setTutorialStep(nextStep);
-	}, []);
 
 	useEffect(() => {
 		if (!error) return;
@@ -132,18 +126,16 @@ function ControllerPage() {
 	}, [error]);
 
 	useEffect(() => {
-		if (cooldownMs <= 0) return;
-		const interval = window.setInterval(
-			() =>
-				setCooldownMs((current) => {
-					const next = Math.max(0, current - 50);
-					cooldownRef.current = next;
-					return next;
-				}),
-			50,
-		);
+		if (!cooldownEndsAt) return;
+		// Wall-clock based so timer throttling can't stretch the cooldown.
+		const interval = window.setInterval(() => {
+			const remaining = Math.max(0, cooldownEndsAt - Date.now());
+			cooldownRef.current = remaining;
+			setCooldownMs(remaining);
+			if (remaining <= 0) setCooldownEndsAt(0);
+		}, 50);
 		return () => window.clearInterval(interval);
-	}, [cooldownMs]);
+	}, [cooldownEndsAt]);
 
 	// biome-ignore lint/correctness/useExhaustiveDependencies: The interval reads stable refs and only follows active drag state.
 	useEffect(() => {
@@ -163,13 +155,23 @@ function ControllerPage() {
 		};
 	}, []);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: Sensor and socket handlers use refs; the lifecycle is keyed by room.
+	useEffect(() => {
+		return () => {
+			if (motionListenerRef.current) {
+				window.removeEventListener("devicemotion", motionListenerRef.current);
+				motionListenerRef.current = null;
+			}
+		};
+	}, []);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Sensor and socket handlers use refs; the lifecycle is keyed by room and reconnect attempt.
 	useEffect(() => {
 		if (!room) return;
 		if (typeof WebSocket === "undefined") {
 			setConnection("WebSocket unavailable");
 			return;
 		}
+		let retryTimer: number | undefined;
 		const storageKey = `flick-session:${room}`;
 		const existingSession = window.localStorage.getItem(storageKey);
 		const sessionId =
@@ -187,6 +189,7 @@ function ControllerPage() {
 		);
 		socketRef.current = socket;
 		socket.onopen = () => {
+			backoffRef.current = 0;
 			setConnection("Connected");
 			setError("");
 		};
@@ -221,15 +224,12 @@ function ControllerPage() {
 				message.playerId === assignmentRef.current?.playerId
 			) {
 				if (message.practice) {
-					tutorialStepRef.current = "ready";
-					setTutorialStep("ready");
 					showConfirmation("PRACTICE THROW ACCEPTED");
 					vibrate(70);
 					return;
 				}
 				throwCountRef.current += 1;
-				cooldownRef.current = THROW_COOLDOWN_MS;
-				setCooldownMs(THROW_COOLDOWN_MS);
+				startCooldown();
 				setProjectile(message.projectileType);
 				setNextProjectile(
 					nextProjectileType(
@@ -268,25 +268,45 @@ function ControllerPage() {
 				setError(message.message);
 			}
 		};
-		socket.onclose = () => {
-			setConnection("Disconnected");
+		socket.onclose = (event) => {
+			setConnection("Reconnecting");
 			setError(
-				"Host unavailable. Reopen the room link when the host reconnects.",
+				event.code === 4001
+					? "The host display disconnected. Waiting for it to come back…"
+					: "Connection lost. Reconnecting…",
+			);
+			// The stored session id reclaims the same slot within the grace
+			// period, so keep retrying with a gentle backoff.
+			const delay = Math.min(
+				8_000,
+				1_000 * 2 ** Math.min(backoffRef.current, 3),
+			);
+			backoffRef.current += 1;
+			retryTimer = window.setTimeout(
+				() => setReconnectAttempt((attempt) => attempt + 1),
+				delay,
 			);
 		};
 		socket.onerror = () => setConnection("Error");
 		return () => {
+			if (retryTimer) window.clearTimeout(retryTimer);
+			socket.onopen = null;
+			socket.onmessage = null;
+			socket.onclose = null;
+			socket.onerror = null;
 			socket.close();
-			if (motionListenerRef.current) {
-				window.removeEventListener("devicemotion", motionListenerRef.current);
-				motionListenerRef.current = null;
-			}
 			socketRef.current = null;
 		};
-	}, [room]);
+	}, [room, reconnectAttempt]);
 
 	function send(message: ControllerMessage) {
 		sendSocketMessage(socketRef.current, message);
+	}
+
+	function startCooldown() {
+		cooldownRef.current = THROW_COOLDOWN_MS;
+		setCooldownMs(THROW_COOLDOWN_MS);
+		setCooldownEndsAt(Date.now() + THROW_COOLDOWN_MS);
 	}
 
 	function sendAimValue(value: number, force = false) {
@@ -311,17 +331,6 @@ function ControllerPage() {
 		const next = clamp(Number.isFinite(value) ? value : 0, -1, 1);
 		aimRef.current = next;
 		setAim(next);
-		if (tutorialStepRef.current === "aim") {
-			aimRangeRef.current = {
-				min: Math.min(aimRangeRef.current.min, next),
-				max: Math.max(aimRangeRef.current.max, next),
-			};
-			if (aimRangeRef.current.max - aimRangeRef.current.min >= 0.55) {
-				tutorialStepRef.current = "throw";
-				setTutorialStep("throw");
-				showConfirmation("AIM STEP COMPLETE");
-			}
-		}
 		sendAimValue(next, force);
 	}
 
@@ -339,7 +348,9 @@ function ControllerPage() {
 	}
 
 	function handlePointerDown(event: ReactPointerEvent<HTMLDivElement>) {
-		if (!event.isPrimary || activePointerIdRef.current !== null) return;
+		// No isPrimary check: a thumb resting elsewhere on the screen must not
+		// block aiming. One-drag-at-a-time is enforced by the active pointer id.
+		if (activePointerIdRef.current !== null) return;
 		activePointerIdRef.current = event.pointerId;
 		setIsAiming(true);
 		try {
@@ -376,10 +387,10 @@ function ControllerPage() {
 	function handleAimKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
 		if (event.key === "ArrowLeft") {
 			event.preventDefault();
-			updateAimValue(aimRef.current - 0.08);
+			updateAimValue(aimRef.current - 0.08, true);
 		} else if (event.key === "ArrowRight") {
 			event.preventDefault();
-			updateAimValue(aimRef.current + 0.08);
+			updateAimValue(aimRef.current + 0.08, true);
 		} else if (event.key === "Home") {
 			event.preventDefault();
 			updateAimValue(-1, true);
@@ -391,13 +402,35 @@ function ControllerPage() {
 
 	function handleMotion(event: DeviceMotionEvent) {
 		motionEventCountRef.current += 1;
-		const acceleration =
-			event.acceleration ?? event.accelerationIncludingGravity;
-		const x = acceleration?.x ?? 0;
-		const y = acceleration?.y ?? 0;
-		const z = acceleration?.z ?? 0;
-		const nextMagnitude = Math.sqrt(x * x + y * y + z * z);
-		const forwardMagnitude = forwardAccelerationMagnitude(acceleration);
+		const linear = event.acceleration;
+		const hasLinear =
+			Number.isFinite(linear?.x ?? Number.NaN) ||
+			Number.isFinite(linear?.y ?? Number.NaN) ||
+			Number.isFinite(linear?.z ?? Number.NaN);
+		let forwardMagnitude: number;
+		let nextMagnitude: number;
+		if (hasLinear) {
+			const x = linear?.x ?? 0;
+			const y = linear?.y ?? 0;
+			const z = linear?.z ?? 0;
+			nextMagnitude = Math.sqrt(x * x + y * y + z * z);
+			forwardMagnitude = forwardAccelerationMagnitude(linear);
+		} else {
+			// No gravity-free data on this device: subtract a low-pass gravity
+			// estimate so the ~9.8 m/s² baseline can't trigger phantom throws.
+			const raw = event.accelerationIncludingGravity;
+			const filtered = removeGravity(
+				{ x: raw?.x ?? 0, y: raw?.y ?? 0, z: raw?.z ?? 0 },
+				gravityFilterRef.current,
+			);
+			gravityFilterRef.current = filtered.state;
+			nextMagnitude = Math.sqrt(
+				filtered.linear.x * filtered.linear.x +
+					filtered.linear.y * filtered.linear.y +
+					filtered.linear.z * filtered.linear.z,
+			);
+			forwardMagnitude = nextMagnitude;
+		}
 		const now = Date.now();
 		if (now - lastMotionUiAtRef.current >= 100) {
 			lastMotionUiAtRef.current = now;
@@ -411,10 +444,7 @@ function ControllerPage() {
 			FLICK_SENSITIVITY_CONFIG[sensitivityRef.current],
 		);
 		detectorRef.current = result.state;
-		if (
-			result.flicked &&
-			(phaseRef.current === "playing" || tutorialStepRef.current === "throw")
-		)
+		if (result.flicked && phaseRef.current === "playing")
 			sendFlick(result.intensity, "motion");
 	}
 
@@ -452,18 +482,13 @@ function ControllerPage() {
 	}
 
 	function sendFlick(intensity: number, source: ThrowSource) {
-		if (
-			cooldownRef.current > 0 ||
-			(phaseRef.current !== "playing" && tutorialStepRef.current !== "throw")
-		)
-			return;
+		if (cooldownRef.current > 0 || phaseRef.current !== "playing") return;
 		const safeIntensity = clamp(
 			Number.isFinite(intensity) ? intensity : 0.75,
 			0,
 			1,
 		);
-		cooldownRef.current = THROW_COOLDOWN_MS;
-		setCooldownMs(THROW_COOLDOWN_MS);
+		startCooldown();
 		setLastFlick(safeIntensity);
 		setLastThrowSource(source);
 		showConfirmation(source === "button" ? "THROW SENT" : "FLICK SENT");
@@ -478,31 +503,10 @@ function ControllerPage() {
 
 	function toggleReady() {
 		if (!assignment) return;
-		if (!ready && tutorialStepRef.current === "ready") {
-			tutorialStepRef.current = "complete";
-			setTutorialStep("complete");
-			writeTutorialComplete(true);
-		}
-		if (!ready && tutorialStepRef.current !== "complete") {
-			showConfirmation("FINISH THE QUICK TUTORIAL");
-			return;
-		}
 		const next = !ready;
 		setReady(next);
 		send({ type: "ready", ready: next });
 		showConfirmation(next ? "READY UP" : "NOT READY");
-	}
-
-	function replayTutorial() {
-		writeTutorialComplete(false);
-		if (ready) {
-			setReady(false);
-			send({ type: "ready", ready: false });
-		}
-		tutorialStepRef.current = "aim";
-		aimRangeRef.current = { min: aimRef.current, max: aimRef.current };
-		setTutorialStep("aim");
-		showConfirmation("TUTORIAL RESTARTED");
 	}
 
 	function showConfirmation(message: string) {
@@ -543,10 +547,8 @@ function ControllerPage() {
 		? Math.max(0, Math.min(1, 1 - cooldownMs / THROW_COOLDOWN_MS))
 		: 1;
 	const canThrow =
-		Boolean(assignment) &&
-		cooldownMs === 0 &&
-		(phase === "playing" || tutorialStep === "throw");
-	const tutorial = tutorialCopy(tutorialStep);
+		Boolean(assignment) && cooldownMs === 0 && phase === "playing";
+	const motionSignal = Math.min(1, magnitude / 24);
 	const wakeLockCopy = screenWakeLockCopy(wakeLockStatus);
 
 	return (
@@ -610,20 +612,6 @@ function ControllerPage() {
 					<ProjectileReadout label="NEXT" type={nextProjectile} />
 				</section>
 
-				{tutorialStep !== "complete" ? (
-					<section className={`tutorial-card tutorial-${tutorialStep}`}>
-						<header>
-							<span>HOW TO PLAY</span>
-							<strong>
-								0{tutorial.index} <em>/ 03</em>
-							</strong>
-						</header>
-						<h2>{tutorial.title}</h2>
-						<p>{tutorial.detail}</p>
-						{tutorialStep === "throw" ? <small>Or tap THROW</small> : null}
-					</section>
-				) : null}
-
 				<div
 					ref={aimSurfaceRef}
 					className={`controller-aim-surface ${isAiming ? "is-dragging" : ""}`}
@@ -682,11 +670,9 @@ function ControllerPage() {
 								? `${(cooldownMs / 1000).toFixed(1)}s cooldown`
 								: canThrow
 									? "Tap if motion is unavailable"
-									: tutorialStep === "aim"
-										? "Finish the aim step first"
-										: phase === "lobby"
-											? "Waiting for the host to start"
-											: "Throw unavailable"}
+									: phase === "lobby"
+										? "Waiting for the host to start"
+										: "Throw unavailable"}
 						</small>
 					</button>
 				</section>
@@ -711,6 +697,37 @@ function ControllerPage() {
 								: "Enable Physical Flick"}
 						</button>
 						<output
+							className={`motion-monitor ${permission === "Enabled" ? "is-enabled" : ""} ${motionEventCount > 0 ? "is-live" : ""}`}
+							aria-label={
+								permission === "Enabled"
+									? `Sensor ${motionEventCount > 0 ? "receiving data" : "waiting for data"}, ${magnitude.toFixed(1)} meters per second squared`
+									: "Motion sensor is off"
+							}
+						>
+							<span className="motion-monitor-heading">
+								<strong>SENSOR SIGNAL</strong>
+								<em>
+									{permission !== "Enabled"
+										? "OFF"
+										: motionEventCount > 0
+											? "RECEIVING"
+											: "WAITING"}
+								</em>
+							</span>
+							<span className="motion-meter" aria-hidden="true">
+								<span
+									style={{
+										transform: `scaleX(${motionSignal})`,
+									}}
+								/>
+							</span>
+							<span className="motion-monitor-readout">
+								{permission === "Enabled"
+									? `${magnitude.toFixed(1)} m/s² · ${motionEventCount} events`
+									: "Enable physical flick, then move the phone"}
+							</span>
+						</output>
+						<output
 							className={`motion-status motion-status-${permission.toLowerCase().replaceAll(" ", "-")}`}
 							aria-live="polite"
 						>
@@ -734,20 +751,9 @@ function ControllerPage() {
 							className={`action-button ${ready ? "action-ready" : "action-accent"}`}
 							type="button"
 							onClick={toggleReady}
-							disabled={
-								!assignment ||
-								(!ready &&
-									tutorialStep !== "complete" &&
-									tutorialStep !== "ready")
-							}
+							disabled={!assignment}
 						>
-							{ready
-								? "Ready — tap to leave ready state"
-								: tutorialStep === "ready"
-									? "You’re ready — mark me ready"
-									: tutorialStep !== "complete"
-										? "Finish the quick tutorial"
-										: "Mark Me Ready"}
+							{ready ? "Ready — tap to leave ready state" : "Mark Me Ready"}
 						</button>
 					</div>
 				) : null}
@@ -828,13 +834,6 @@ function ControllerPage() {
 						>
 							✦ Test Throw
 						</button>
-						<button
-							className="debug-test-button"
-							type="button"
-							onClick={replayTutorial}
-						>
-							Replay Tutorial
-						</button>
 					</section>
 				) : null}
 
@@ -881,46 +880,6 @@ function DebugRow({ label, value }: { label: string; value: string }) {
 			<strong>{value}</strong>
 		</div>
 	);
-}
-
-function tutorialCopy(step: TutorialStep) {
-	if (step === "throw")
-		return {
-			index: 2,
-			title: "Flick to throw",
-			detail:
-				"Hold the phone securely and make a short forward throwing motion.",
-		};
-	if (step === "ready")
-		return {
-			index: 3,
-			title: "You’re ready to play",
-			detail: "Tap Mark Me Ready when your aim and throw feel comfortable.",
-		};
-	return {
-		index: 1,
-		title: "Drag to aim",
-		detail: "Drag the marker left and right through a meaningful range.",
-	};
-}
-
-function readTutorialComplete() {
-	if (typeof window === "undefined") return false;
-	try {
-		return window.localStorage.getItem(TUTORIAL_STORAGE_KEY) === "true";
-	} catch {
-		return false;
-	}
-}
-
-function writeTutorialComplete(complete: boolean) {
-	if (typeof window === "undefined") return;
-	try {
-		if (complete) window.localStorage.setItem(TUTORIAL_STORAGE_KEY, "true");
-		else window.localStorage.removeItem(TUTORIAL_STORAGE_KEY);
-	} catch {
-		/* Private browsing can disable localStorage without disabling gameplay. */
-	}
 }
 
 function vibrate(...pattern: number[]) {

@@ -1,15 +1,13 @@
-export const MAX_INPUT_AGE_MS = 10_000;
-export const MAX_INPUT_CLOCK_SKEW_MS = 2_000;
+export const CLOCK_RESET_THRESHOLD_MS = 30_000;
 
 export function isFreshInputTimestamp(
 	timestamp: number,
-	now: number,
 	previousTimestamp?: number,
 ) {
-	if (
-		timestamp < now - MAX_INPUT_AGE_MS ||
-		timestamp > now + MAX_INPUT_CLOCK_SKEW_MS
-	)
-		return false;
-	return previousTimestamp === undefined || timestamp > previousTimestamp;
+	if (!Number.isFinite(timestamp) || timestamp <= 0) return false;
+	if (previousTimestamp === undefined) return true;
+	if (timestamp > previousTimestamp) return true;
+	// A large backwards jump means the phone clock was reset (NTP sync,
+	// timezone change); accept it and rebase instead of locking the player out.
+	return previousTimestamp - timestamp > CLOCK_RESET_THRESHOLD_MS;
 }

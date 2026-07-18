@@ -40,6 +40,11 @@ import type {
 	PropType,
 } from "../types";
 
+// Matter applies gravity per fixed 16.66ms step: gravity.y (0.9) *
+// gravityScale (0.001) * delta² ≈ 0.25 px/step² — used for the aim preview.
+const AIM_PREVIEW_GRAVITY_STEP = 0.25;
+const AIM_PREVIEW_INTENSITY = 0.75;
+
 const COLLISION_CATEGORY = {
 	WORLD: 0x0001,
 	PROJECTILE: 0x0002,
@@ -126,6 +131,7 @@ export class ArenaScene extends Phaser.Scene {
 	private readonly spectatorBuffer = new SnapshotBuffer();
 	private readonly spectatorEvents = new PresentationEventDeduplicator();
 	private lastSpectatorDebugAt = 0;
+	private cleanupDone = false;
 
 	constructor(bridge: GameBridge, mode: GameMode, allowSinglePlayer: boolean) {
 		super({ key: "ArenaScene" });
@@ -161,14 +167,18 @@ export class ArenaScene extends Phaser.Scene {
 		} else {
 			this.matter.world.pause();
 		}
+		// React tears the game down with game.destroy(), which emits "destroy"
+		// without a prior "shutdown" — listen to both or cleanup never runs.
 		this.events.once("shutdown", this.shutdown, this);
+		this.events.once("destroy", this.shutdown, this);
 		this.bridge.emit({ type: "game-ready" });
 	}
 
 	update() {
 		if (this.mode === "spectator") {
-			const snapshot = this.spectatorBuffer.sample(
-				Date.now() - SPECTATOR_INTERPOLATION_DELAY_MS,
+			const snapshot = this.spectatorBuffer.sampleLocal(
+				Date.now(),
+				SPECTATOR_INTERPOLATION_DELAY_MS,
 			);
 			if (snapshot) this.renderSpectatorSnapshot(snapshot);
 			if (
@@ -440,8 +450,8 @@ export class ArenaScene extends Phaser.Scene {
 	private handleCommand(command: ReactToGameEvent) {
 		switch (command.type) {
 			case "player-joined":
-				this.createPlayer(command.player);
-				this.audio.play("player-join");
+				if (this.createPlayer(command.player))
+					this.audio.play("player-join");
 				break;
 			case "player-left":
 				this.removePlayer(command.playerId);
@@ -532,7 +542,7 @@ export class ArenaScene extends Phaser.Scene {
 	}
 
 	private createPlayer(assignment: PlayerAssignment) {
-		if (this.players.has(assignment.playerId)) return;
+		if (this.players.has(assignment.playerId)) return false;
 		const station = STATIONS[assignment.playerNumber];
 		const sprite = this.matter.add
 			.image(station.x, station.y, `player-${assignment.color}`, undefined, {
@@ -600,6 +610,7 @@ export class ArenaScene extends Phaser.Scene {
 				yoyo: true,
 				repeat: -1,
 			});
+		return true;
 	}
 
 	private removePlayer(playerId: string) {
@@ -624,24 +635,33 @@ export class ArenaScene extends Phaser.Scene {
 		const graphic = player.aimGraphic;
 		const isActive = player.aimActiveUntil > this.time.now;
 		graphic.clear();
-		graphic.lineStyle(isActive ? 3 : 2, tint, isActive ? 0.76 : 0.2);
-		graphic.lineBetween(
-			station.x,
-			station.y,
-			station.x + Math.cos(player.angle) * 164,
-			station.y + Math.sin(player.angle) * 164,
+		// Preview the real physics arc for the projectile about to be thrown,
+		// assuming a button-strength throw (intensity 0.75).
+		const definition = PROJECTILE_DEFINITIONS[player.nextType];
+		const velocity = launchVelocity(
+			player.angle,
+			AIM_PREVIEW_INTENSITY,
+			definition.speedMultiplier,
 		);
-		for (let index = 1; index <= 7; index += 1) {
-			const distance = index * 31;
-			graphic.fillStyle(
-				tint,
-				(isActive ? 0.62 : 0.32) - index * (isActive ? 0.035 : 0.025),
-			);
-			graphic.fillCircle(
-				station.x + Math.cos(player.angle) * distance,
-				station.y + Math.sin(player.angle) * distance,
-				4,
-			);
+		let x = station.x + Math.cos(player.angle) * 44;
+		let y = station.y + Math.sin(player.angle) * 44;
+		let vx = velocity.x;
+		let vy = velocity.y;
+		graphic.lineStyle(isActive ? 3 : 2, tint, isActive ? 0.6 : 0.18);
+		graphic.lineBetween(station.x, station.y, x, y);
+		const baseAlpha = isActive ? 0.62 : 0.3;
+		const airDrag = 1 - definition.frictionAir;
+		for (let index = 0; index < 12; index += 1) {
+			for (let step = 0; step < 2; step += 1) {
+				vx *= airDrag;
+				vy = vy * airDrag + AIM_PREVIEW_GRAVITY_STEP;
+				x += vx;
+				y += vy;
+			}
+			if (x < 0 || x > GAME_WIDTH || y < 0 || y > GAME_HEIGHT) break;
+			const fade = 1 - index / 14;
+			graphic.fillStyle(tint, baseAlpha * fade);
+			graphic.fillCircle(x, y, (isActive ? 4.6 : 3.8) - index * 0.16);
 		}
 	}
 
@@ -664,9 +684,11 @@ export class ArenaScene extends Phaser.Scene {
 		const labels = ["3", "2", "1", "FLICK!"];
 		let index = 0;
 		this.showCountdown(labels[index] ?? "3");
+		// The first label is shown above, so the timer only fires for the
+		// remaining labels.length - 1 entries (repeat is zero-based).
 		this.countdownEvent = this.time.addEvent({
 			delay: 750,
-			repeat: labels.length - 1,
+			repeat: labels.length - 2,
 			callback: () => {
 				index += 1;
 				this.showCountdown(labels[index] ?? "FLICK!");
@@ -688,6 +710,9 @@ export class ArenaScene extends Phaser.Scene {
 	}
 
 	private clearCountdown() {
+		if (this.countdownValue === undefined && !this.countdownText) return;
+		this.countdownEvent?.remove(false);
+		this.countdownEvent = undefined;
 		this.countdownValue = undefined;
 		const countdown = this.countdownText;
 		this.countdownText = undefined;
@@ -789,6 +814,8 @@ export class ArenaScene extends Phaser.Scene {
 			(practice ? this.phase !== "lobby" : this.phase !== "playing") ||
 			this.projectiles.size >= MAX_ACTIVE_PROJECTILES
 		) {
+			// The launch aborted, so give the cooldown back.
+			player.cooldownUntil = this.time.now;
 			player.sprite.setScale(1).setAngle(0);
 			return;
 		}
@@ -950,6 +977,7 @@ export class ArenaScene extends Phaser.Scene {
 		if (
 			!projectile ||
 			projectile.metadata.practice ||
+			this.phase !== "playing" ||
 			!target ||
 			!canScoreAgainst(projectile.metadata.scoredPlayerIds, targetPlayerId)
 		)
@@ -1018,6 +1046,7 @@ export class ArenaScene extends Phaser.Scene {
 		if (
 			!projectile ||
 			projectile.metadata.practice ||
+			this.phase !== "playing" ||
 			!prop ||
 			prop.destroyed ||
 			projectile.metadata.destroyedPropIds.has(propId)
@@ -1139,6 +1168,7 @@ export class ArenaScene extends Phaser.Scene {
 			player.cooldownUntil = 0;
 			this.emitScore(player);
 		}
+		this.finalStandings = [];
 	}
 
 	private resetMatch() {
@@ -1148,7 +1178,7 @@ export class ArenaScene extends Phaser.Scene {
 		this.matchEndsAt = 0;
 		this.lastTimerSecond = -1;
 		this.finalStandings = [];
-		this.countdownText?.setVisible(false);
+		this.clearCountdown();
 		this.bridge.emit({ type: "phase-changed", phase: this.phase });
 		this.bridge.emit({ type: "timer-changed", timeRemainingMs: 0 });
 	}
@@ -1366,11 +1396,13 @@ export class ArenaScene extends Phaser.Scene {
 	private renderSpectatorSnapshot(snapshot: SpectatorSnapshot) {
 		if (this.mode !== "spectator") return;
 		this.phase = snapshot.phase;
-		if (this.phase === "playing") this.clearCountdown();
+		if (this.phase !== "countdown") this.clearCountdown();
+		// Presentation events also drive the countdown (instantly), while
+		// snapshots arrive interpolation-delayed — only ever move it forward.
 		if (
 			this.phase === "countdown" &&
 			snapshot.countdownValue !== undefined &&
-			snapshot.countdownValue !== this.countdownValue
+			countdownRank(snapshot.countdownValue) > countdownRank(this.countdownValue)
 		)
 			this.showCountdown(
 				snapshot.countdownValue === "FLICK"
@@ -1533,9 +1565,11 @@ export class ArenaScene extends Phaser.Scene {
 	}
 
 	private shutdown() {
+		if (this.cleanupDone) return;
+		this.cleanupDone = true;
 		this.removeBridgeListener?.();
-		this.matter.world.off("collisionstart", this.handleCollision, this);
-		this.input.keyboard?.off("keydown", this.handleKeyboard, this);
+		this.matter?.world?.off("collisionstart", this.handleCollision, this);
+		this.input?.keyboard?.off("keydown", this.handleKeyboard, this);
 		this.audio.destroy();
 		this.effects?.destroy();
 	}
@@ -1555,4 +1589,10 @@ function isUuid(value: string) {
 	return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
 		value,
 	);
+}
+
+function countdownRank(value: 3 | 2 | 1 | "FLICK" | undefined) {
+	if (value === undefined) return -1;
+	if (value === "FLICK") return 3;
+	return 3 - value;
 }

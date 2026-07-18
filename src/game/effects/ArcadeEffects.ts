@@ -209,6 +209,9 @@ export class ArcadeEffects {
 
 	private hitStop(duration: number) {
 		if (this.reducedMotion || this.hitStopActive) return;
+		// Spectator scenes keep their physics world paused permanently;
+		// resuming it here would leave the engine running forever.
+		if (!this.scene.matter.world.enabled) return;
 		this.hitStopActive = true;
 		this.scene.matter.world.pause();
 		this.scene.time.delayedCall(duration, () => {

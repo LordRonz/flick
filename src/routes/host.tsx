@@ -56,6 +56,7 @@ function HostPage() {
 	const { room } = Route.useSearch();
 	const bridgeRef = useRef(new GameBridge());
 	const socketRef = useRef<WebSocket | null>(null);
+	const phaseRef = useRef<MatchPhase>("lobby");
 	const [socketState, setSocketState] = useState("Connecting");
 	const [players, setPlayers] = useState<LobbyPlayer[]>([]);
 	const [scores, setScores] = useState<Record<string, number>>({});
@@ -205,6 +206,8 @@ function HostPage() {
 					type: "request-spectator-snapshot",
 					spectatorId: message.spectatorId,
 				});
+			} else if (message.type === "error") {
+				console.warn("Room rejected a host message:", message.message);
 			}
 		};
 		socket.onclose = () => {
@@ -232,6 +235,7 @@ function HostPage() {
 			handleGameEvent(
 				event,
 				socketRef,
+				phaseRef,
 				setPhase,
 				setTimeRemainingMs,
 				setScores,
@@ -606,6 +610,7 @@ function HostPage() {
 function handleGameEvent(
 	event: GameToReactEvent,
 	socketRef: { current: WebSocket | null },
+	phaseRef: { current: MatchPhase },
 	setPhase: (phase: MatchPhase) => void,
 	setTimeRemainingMs: (value: number) => void,
 	setScores: Dispatch<SetStateAction<Record<string, number>>>,
@@ -619,6 +624,7 @@ function handleGameEvent(
 			event: event.event,
 		});
 	} else if (event.type === "phase-changed") {
+		phaseRef.current = event.phase;
 		setPhase(event.phase);
 		sendSocketMessage(socketRef.current, {
 			type: "match-state",
@@ -626,12 +632,14 @@ function handleGameEvent(
 		});
 	} else if (event.type === "timer-changed") {
 		setTimeRemainingMs(event.timeRemainingMs);
-		if (event.timeRemainingMs === 60_000 || event.timeRemainingMs === 0)
-			sendSocketMessage(socketRef.current, {
-				type: "match-state",
-				phase: event.timeRemainingMs === 0 ? "results" : "playing",
-				timeRemainingMs: event.timeRemainingMs,
-			});
+		// The scene emits this once per second; relay it with the current
+		// phase so controllers tick their timer without inferring phase from
+		// magic timer values (which broke Back to Lobby).
+		sendSocketMessage(socketRef.current, {
+			type: "match-state",
+			phase: phaseRef.current,
+			timeRemainingMs: event.timeRemainingMs,
+		});
 	} else if (event.type === "score-changed") {
 		setScores((current) => ({ ...current, [event.playerId]: event.score }));
 		if (isUuid(event.playerId))

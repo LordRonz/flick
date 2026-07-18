@@ -32,6 +32,7 @@ export function correctTimer(
 export class SnapshotBuffer {
 	private snapshots: SpectatorSnapshot[] = [];
 	private sequence = -1;
+	private clockOffsetMs: number | null = null;
 
 	get size() {
 		return this.snapshots.length;
@@ -41,8 +42,15 @@ export class SnapshotBuffer {
 		return this.sequence;
 	}
 
-	push(snapshot: SpectatorSnapshot) {
+	push(snapshot: SpectatorSnapshot, receivedAt = Date.now()) {
 		if (snapshot.sequence <= this.sequence) return false;
+		// Host and spectator wall clocks are not synchronized; track the
+		// host-time-minus-local-time offset so sampling works under skew.
+		const offset = snapshot.hostTimestamp - receivedAt;
+		this.clockOffsetMs =
+			this.clockOffsetMs === null
+				? offset
+				: this.clockOffsetMs + (offset - this.clockOffsetMs) * 0.15;
 		this.sequence = snapshot.sequence;
 		this.snapshots.push(snapshot);
 		if (this.snapshots.length > 12) this.snapshots.shift();
@@ -52,6 +60,11 @@ export class SnapshotBuffer {
 	clear() {
 		this.snapshots = [];
 		this.sequence = -1;
+		this.clockOffsetMs = null;
+	}
+
+	sampleLocal(localNow: number, delayMs: number) {
+		return this.sample(localNow + (this.clockOffsetMs ?? 0) - delayMs);
 	}
 
 	sample(renderTimestamp: number) {

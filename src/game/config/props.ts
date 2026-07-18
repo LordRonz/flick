@@ -46,7 +46,7 @@ export const PROP_DEFINITIONS: Record<PropType, PropDefinition> = {
 		height: 96,
 		maxHealth: 3,
 		scoreValue: 125,
-		collisionShape: "circle",
+		collisionShape: "rectangle",
 		isStatic: true,
 	},
 	"document-stack": {

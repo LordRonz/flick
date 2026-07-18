@@ -9,6 +9,9 @@ export class GameBridge {
 
 	send(command: ReactToGameEvent) {
 		if (this.commandListeners.size === 0) {
+			// If the game never attaches (e.g. a failed chunk load) high-rate
+			// aim commands must not grow this queue without bound.
+			if (this.pendingCommands.length >= 256) this.pendingCommands.shift();
 			this.pendingCommands.push(command);
 			return;
 		}
