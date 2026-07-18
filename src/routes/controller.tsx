@@ -11,6 +11,7 @@ import "../controller/controller.css";
 import {
 	type AimSendState,
 	nextAimMessage,
+	normalizedAimToTrackPercent,
 	pointerXToNormalizedAim,
 } from "../controller/aim-input";
 import {
@@ -537,7 +538,7 @@ function ControllerPage() {
 		? mapAimAngle(aim, STATIONS[assignment.playerNumber].aim)
 		: 0;
 	const aimDegrees = Math.round((stationAimAngle * 180) / Math.PI);
-	const aimPosition = ((aim + 1) / 2) * 100;
+	const aimPosition = normalizedAimToTrackPercent(aim);
 	const throwProgress = cooldownMs
 		? Math.max(0, Math.min(1, 1 - cooldownMs / THROW_COOLDOWN_MS))
 		: 1;
@@ -647,7 +648,7 @@ function ControllerPage() {
 					<span className="aim-surface-track" />
 					<span
 						className="aim-surface-handle"
-						style={{ left: `calc(${aimPosition}% - 10px)` }}
+						style={{ left: `${aimPosition}%` }}
 					>
 						<span />
 					</span>

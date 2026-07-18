@@ -348,10 +348,11 @@ export class ArcadeAudio {
 		const startedAt = performance.now();
 		const update = (now: number) => {
 			if (token !== this.soundtrackFadeToken || !this.soundtrack) return;
-			const progress = Math.min(1, (now - startedAt) / durationMs);
+			const progress = clamp01((now - startedAt) / durationMs);
 			const eased = 1 - (1 - progress) ** 3;
-			soundtrack.volume =
-				initialVolume + (targetVolume - initialVolume) * eased;
+			soundtrack.volume = clamp01(
+				initialVolume + (targetVolume - initialVolume) * eased,
+			);
 			if (progress < 1) requestAnimationFrame(update);
 			else onComplete?.();
 		};

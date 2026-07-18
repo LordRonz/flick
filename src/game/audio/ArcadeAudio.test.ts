@@ -7,7 +7,7 @@ class FakeAudio {
 	loop = false;
 	preload = "";
 	src: string;
-	volume = 1;
+	private volumeValue = 1;
 	load = vi.fn();
 	pause = vi.fn();
 	play = vi.fn(() => Promise.resolve());
@@ -17,6 +17,16 @@ class FakeAudio {
 	constructor(src: string) {
 		this.src = src;
 		FakeAudio.latest = this;
+	}
+
+	get volume() {
+		return this.volumeValue;
+	}
+
+	set volume(value: number) {
+		if (value < 0 || value > 1)
+			throw new RangeError("Audio volume must stay between 0 and 1");
+		this.volumeValue = value;
 	}
 }
 
@@ -73,5 +83,21 @@ describe("ArcadeAudio soundtrack", () => {
 		audio.stopSoundtrack();
 		expect(FakeAudio.latest?.pause).toHaveBeenCalledTimes(2);
 		expect(FakeAudio.latest?.currentTime).toBe(0);
+	});
+
+	it("clamps fade progress when a frame timestamp predates fade setup", async () => {
+		let frame = 0;
+		vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => {
+			frame += 1;
+			callback(frame === 1 ? 0 : performance.now() + 1_000);
+			return frame;
+		});
+		const audio = new ArcadeAudio();
+
+		audio.primeSoundtrack();
+		audio.startSoundtrack();
+		await Promise.resolve();
+
+		expect(FakeAudio.latest?.volume).toBeCloseTo(0.1);
 	});
 });

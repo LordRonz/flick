@@ -31,3 +31,20 @@ export function mapThrowSpeed(intensity: number) {
 	const normalized = clamp(Number.isFinite(intensity) ? intensity : 0, 0, 1);
 	return 12 + normalized * (28 - 12);
 }
+
+export function launchVelocity(
+	angle: number,
+	intensity: number,
+	speedMultiplier: number,
+) {
+	const safeAngle = Number.isFinite(angle) ? angle : 0;
+	const safeMultiplier =
+		Number.isFinite(speedMultiplier) && speedMultiplier > 0
+			? speedMultiplier
+			: 1;
+	const speed = mapThrowSpeed(intensity) * safeMultiplier;
+	return {
+		x: Math.cos(safeAngle) * speed,
+		y: Math.sin(safeAngle) * speed,
+	};
+}

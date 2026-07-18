@@ -3,6 +3,7 @@ import type { PlayerNumber } from "../types";
 
 export const GAME_WIDTH = 1280;
 export const GAME_HEIGHT = 720;
+export const WORLD_BOUNDARY_THICKNESS = 48;
 
 export type Station = {
 	playerNumber: PlayerNumber;
@@ -55,3 +56,30 @@ export const PLATFORM_LAYOUT = [
 	{ x: 876, y: 420, width: 310, height: 20 },
 	{ x: 640, y: 332, width: 260, height: 18 },
 ];
+
+export const WORLD_BOUNDARIES = [
+	{
+		x: -WORLD_BOUNDARY_THICKNESS / 2,
+		y: GAME_HEIGHT / 2,
+		width: WORLD_BOUNDARY_THICKNESS,
+		height: GAME_HEIGHT + WORLD_BOUNDARY_THICKNESS * 2,
+	},
+	{
+		x: GAME_WIDTH + WORLD_BOUNDARY_THICKNESS / 2,
+		y: GAME_HEIGHT / 2,
+		width: WORLD_BOUNDARY_THICKNESS,
+		height: GAME_HEIGHT + WORLD_BOUNDARY_THICKNESS * 2,
+	},
+	{
+		x: GAME_WIDTH / 2,
+		y: -WORLD_BOUNDARY_THICKNESS / 2,
+		width: GAME_WIDTH + WORLD_BOUNDARY_THICKNESS * 2,
+		height: WORLD_BOUNDARY_THICKNESS,
+	},
+	{
+		x: GAME_WIDTH / 2,
+		y: GAME_HEIGHT + WORLD_BOUNDARY_THICKNESS / 2,
+		width: GAME_WIDTH + WORLD_BOUNDARY_THICKNESS * 2,
+		height: WORLD_BOUNDARY_THICKNESS,
+	},
+] as const;

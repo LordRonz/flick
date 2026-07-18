@@ -17,6 +17,7 @@ import {
 	GAME_WIDTH,
 	PLATFORM_LAYOUT,
 	STATIONS,
+	WORLD_BOUNDARIES,
 } from "../config/arena";
 import { type FlickSource, THROW_COOLDOWN_MS } from "../config/controls";
 import {
@@ -26,7 +27,7 @@ import {
 } from "../config/projectiles";
 import { PROP_DEFINITIONS, PROP_LAYOUT } from "../config/props";
 import { ArcadeEffects } from "../effects/ArcadeEffects";
-import { mapAimAngle, mapThrowSpeed, smoothAim } from "../systems/aim";
+import { launchVelocity, mapAimAngle, smoothAim } from "../systems/aim";
 import { clamp } from "../systems/math";
 import { canScoreAgainst, hitScore, propScore } from "../systems/scoring";
 import type {
@@ -349,23 +350,21 @@ export class ArenaScene extends Phaser.Scene {
 				},
 			);
 		}
-		for (const wall of [
-			{ x: -12, y: GAME_HEIGHT / 2, width: 24, height: GAME_HEIGHT },
-			{
-				x: GAME_WIDTH + 12,
-				y: GAME_HEIGHT / 2,
-				width: 24,
-				height: GAME_HEIGHT,
-			},
-		]) {
-			this.matter.add.rectangle(wall.x, wall.y, wall.width, wall.height, {
-				isStatic: true,
-				label: "world",
-				collisionFilter: {
-					category: COLLISION_CATEGORY.WORLD,
-					mask: COLLISION_CATEGORY.PROJECTILE,
+		for (const boundary of WORLD_BOUNDARIES) {
+			this.matter.add.rectangle(
+				boundary.x,
+				boundary.y,
+				boundary.width,
+				boundary.height,
+				{
+					isStatic: true,
+					label: "world",
+					collisionFilter: {
+						category: COLLISION_CATEGORY.WORLD,
+						mask: COLLISION_CATEGORY.PROJECTILE,
+					},
 				},
-			});
+			);
 		}
 
 		for (const station of Object.values(STATIONS)) {
@@ -826,11 +825,12 @@ export class ArenaScene extends Phaser.Scene {
 				},
 			})
 			.setDepth(5);
-		const speed = mapThrowSpeed(intensity) * 24 * definition.speedMultiplier;
-		body.setVelocity(
-			Math.cos(launchAngle) * speed,
-			Math.sin(launchAngle) * speed,
+		const velocity = launchVelocity(
+			launchAngle,
+			intensity,
+			definition.speedMultiplier,
 		);
+		body.setVelocity(velocity.x, velocity.y);
 		body.setAngularVelocity(
 			Phaser.Math.FloatBetween(
 				definition.angularVelocityRange.min,

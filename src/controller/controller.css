@@ -83,6 +83,7 @@
 }
 
 .controller-aim-surface {
+	--aim-track-y: 74%;
 	position: relative;
 	display: grid;
 	place-items: center;
@@ -114,7 +115,10 @@
 }
 
 .aim-surface-label {
-	position: relative;
+	position: absolute;
+	top: 18px;
+	left: 0;
+	right: 0;
 	z-index: 3;
 	display: grid;
 	justify-items: center;
@@ -139,7 +143,7 @@
 	position: absolute;
 	left: 10%;
 	right: 10%;
-	top: 69%;
+	top: var(--aim-track-y);
 	height: 2px;
 	background: linear-gradient(
 		90deg,
@@ -152,7 +156,7 @@
 
 .aim-surface-handle {
 	position: absolute;
-	top: calc(69% - 10px);
+	top: calc(var(--aim-track-y) - 16px);
 	z-index: 4;
 	display: grid;
 	place-items: center;
@@ -162,6 +166,7 @@
 	border-radius: 50%;
 	background: var(--ink);
 	box-shadow: 0 0 15px color-mix(in srgb, var(--player-color), transparent 30%);
+	transform: translateX(-50%);
 	transition: left 90ms ease-out;
 }
 
@@ -178,7 +183,7 @@
 
 .aim-surface-limit {
 	position: absolute;
-	top: calc(69% - 9px);
+	top: calc(var(--aim-track-y) - 9px);
 	z-index: 2;
 	color: var(--muted);
 	font-family: var(--mono);
@@ -578,7 +583,7 @@
 }
 
 .aim-surface-handle {
-	top: calc(69% - 16px);
+	top: calc(var(--aim-track-y) - 16px);
 	width: 32px;
 	height: 32px;
 	border: 4px solid var(--ink);
@@ -723,6 +728,6 @@
 	}
 
 	.controller-aim-surface {
-		min-height: 132px;
+		min-height: 140px;
 	}
 }
