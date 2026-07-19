@@ -23,8 +23,15 @@ export const FLICK_DETECTOR_CONFIG = FLICK_SENSITIVITY_CONFIG.normal;
 // intensity reflects the peak of the swing, not the first sample over the line.
 export const FLICK_PEAK_CAPTURE_MS = 120;
 
+// Many Android sensors clamp devicemotion near ±2g (~19.6 m/s²), so a hard
+// flick never approaches maxIntensityMagnitude and reads as a weak throw.
+// Intensity is instead scaled to the strongest magnitude the device has
+// reported this session, floored so light wobbles cannot count as full power.
+export const FLICK_MIN_INTENSITY_RANGE = 8;
+
 export type FlickDetectorState = {
 	lastFlickAt: number;
+	observedMax?: number;
 	pending?: { startedAt: number; peak: number };
 };
 
@@ -93,6 +100,7 @@ export function detectFlick(
 ) {
 	if (!Number.isFinite(magnitude))
 		return { flicked: false, intensity: 0, state };
+	const observedMax = Math.max(state.observedMax ?? 0, magnitude);
 	if (state.pending) {
 		const peak = Math.max(state.pending.peak, magnitude);
 		if (now - state.pending.startedAt < FLICK_PEAK_CAPTURE_MS) {
@@ -101,29 +109,44 @@ export function detectFlick(
 				intensity: 0,
 				state: {
 					lastFlickAt: state.lastFlickAt,
+					observedMax,
 					pending: { startedAt: state.pending.startedAt, peak },
 				},
 			};
 		}
+		const effectiveMax = clamp(
+			observedMax,
+			config.spikeThreshold + FLICK_MIN_INTENSITY_RANGE,
+			config.maxIntensityMagnitude,
+		);
 		const intensity = clamp(
 			(peak - config.spikeThreshold) /
-				(config.maxIntensityMagnitude - config.spikeThreshold),
+				(effectiveMax - config.spikeThreshold),
 			0,
 			1,
 		);
-		return { flicked: true, intensity, state: { lastFlickAt: now } };
+		return {
+			flicked: true,
+			intensity,
+			state: { lastFlickAt: now, observedMax },
+		};
 	}
 	if (
 		magnitude < config.spikeThreshold ||
 		now - state.lastFlickAt < config.cooldownMs
 	) {
-		return { flicked: false, intensity: 0, state };
+		return {
+			flicked: false,
+			intensity: 0,
+			state: { ...state, observedMax },
+		};
 	}
 	return {
 		flicked: false,
 		intensity: 0,
 		state: {
 			lastFlickAt: state.lastFlickAt,
+			observedMax,
 			pending: { startedAt: now, peak: magnitude },
 		},
 	};

@@ -1,5 +1,6 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
+import { BrandMark } from "../components/BrandMark";
 import { playUiCue } from "../game/audio/ArcadeAudio";
 
 export const Route = createFileRoute("/")({ component: Home });
@@ -35,8 +36,7 @@ function Home() {
 		<main className="landing-shell">
 			<section className="landing-copy">
 				<div className="brand-mark">
-					<span className="brand-dot" />
-					FLICK
+					<BrandMark />
 				</div>
 				<p className="eyebrow">PHONE AS CONTROLLER</p>
 				<h1>

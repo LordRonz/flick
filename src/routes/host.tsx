@@ -1,8 +1,10 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
+import { Volume2, VolumeX } from "lucide-react";
 import QRCode from "qrcode";
 import type { Dispatch, KeyboardEvent, SetStateAction } from "react";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
+import { BrandMark } from "../components/BrandMark";
 import { PhaserGame } from "../components/PhaserGame";
 import {
 	type AudioLevels,
@@ -375,8 +377,7 @@ function HostPage() {
 		<main className={`host-shell ${finalMoments ? "is-final-moments" : ""}`}>
 			<header className="app-header">
 				<Link to="/" className="brand-mark">
-					<span className="brand-dot" />
-					FLICK
+					<BrandMark />
 				</Link>
 				<div className="header-status">
 					<span className="status-dot" /> HOST <strong>{socketState}</strong>
@@ -392,8 +393,13 @@ function HostPage() {
 					onFocus={() => playUiCue("ui-hover")}
 					aria-pressed={muted}
 					aria-label={muted ? "Turn sound on" : "Mute sound"}
+					title={muted ? "Turn sound on" : "Mute sound"}
 				>
-					{muted ? "Sound off" : "Sound on"}
+					{muted ? (
+						<VolumeX aria-hidden="true" />
+					) : (
+						<Volume2 aria-hidden="true" />
+					)}
 				</button>
 			</header>
 			<section className="host-layout">
@@ -881,8 +887,7 @@ function EmptyRoom() {
 	return (
 		<main className="empty-state">
 			<Link to="/" className="brand-mark">
-				<span className="brand-dot" />
-				FLICK
+				<BrandMark />
 			</Link>
 			<h1>Create a game first.</h1>
 			<Link to="/" className="text-link">

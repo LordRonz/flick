@@ -43,14 +43,22 @@ a { color: inherit; text-decoration: none; }
 .screen-wake-unsupported .screen-wake-indicator, .screen-wake-denied .screen-wake-indicator, .screen-wake-released .screen-wake-indicator { background: var(--coral); box-shadow: 0 0 8px rgba(255,102,90,.7); }
 .screen-wake-unsupported strong, .screen-wake-denied strong, .screen-wake-released strong { color: #ff9f91; }
 
-.brand-mark { display: inline-flex; align-items: center; gap: 10px; color: var(--text); font-family: var(--mono); font-size: 14px; font-weight: 500; letter-spacing: .24em; }
-.brand-dot, .status-dot { width: 8px; height: 8px; border-radius: 99px; background: var(--mint); box-shadow: 0 0 12px rgba(116,230,178,.85); }
+.brand-mark { display: inline-flex; align-items: center; gap: 10px; color: var(--text); }
+.brand-logo { flex: 0 0 auto; width: 38px; height: 38px; border-radius: 22%; object-fit: cover; }
+.brand-wordmark { display: inline-flex; align-items: baseline; gap: 5px; color: var(--ink); font-size: 15px; font-weight: 900; letter-spacing: -.025em; line-height: 1; white-space: nowrap; }
+.brand-wordmark strong { font-weight: 950; }
+.brand-wordmark > span { color: #c2410c; }
+.brand-wordmark--dark { color: var(--surface); }
+.brand-wordmark--dark > span { color: var(--gold); }
+.status-dot { width: 8px; height: 8px; border-radius: 99px; background: var(--mint); box-shadow: 0 0 12px rgba(116,230,178,.85); }
 .eyebrow, .panel-label { color: var(--cyan); font-family: var(--mono); font-size: 11px; letter-spacing: .16em; text-transform: uppercase; }
 .error-text, .controller-error { color: #ff9f91; font-family: var(--mono); font-size: 12px; }
 
 .landing-shell { position: relative; display: grid; grid-template-columns: minmax(300px, .8fr) minmax(440px, 1.2fr); align-items: center; gap: clamp(48px, 8vw, 140px); width: min(1280px, calc(100% - 64px)); min-height: 100vh; margin: 0 auto; padding: 72px 0; overflow: hidden; }
 .landing-copy { position: relative; z-index: 1; }
 .landing-copy .brand-mark { margin-bottom: 92px; }
+.landing-copy .brand-logo { width: 54px; height: 54px; }
+.landing-copy .brand-wordmark { gap: 6px; font-size: 20px; }
 .landing-copy h1 { max-width: 520px; margin: 18px 0 24px; font-size: clamp(54px, 7vw, 92px); line-height: .92; letter-spacing: -.04em; font-weight: 600; }
 .landing-copy h1 em { color: var(--mint); font-style: normal; }
 .lede { max-width: 390px; margin: 0 0 34px; color: var(--muted); font-size: 18px; line-height: 1.5; }
@@ -106,20 +114,31 @@ a:focus-visible,
 }
 
 .sound-toggle {
-	min-height: 38px;
-	padding: 0 12px;
+	display: inline-grid;
+	place-items: center;
+	flex: 0 0 auto;
+	width: 40px;
+	min-height: 40px;
+	padding: 0;
 	border: 1px solid var(--line);
 	border-radius: 3px;
 	color: var(--muted);
 	background: transparent;
-	font-family: var(--mono);
-	font-size: 10px;
-	letter-spacing: 0.08em;
+}
+
+.sound-toggle svg {
+	width: 19px;
+	height: 19px;
+	stroke-width: 2.5;
 }
 
 .sound-toggle:hover {
 	border-color: var(--cyan);
 	color: var(--text);
+}
+
+.sound-toggle[aria-pressed="true"] {
+	color: var(--coral);
 }
 
 .canvas-frame {
@@ -266,12 +285,8 @@ body {
 
 .brand-mark {
 	font-family: var(--sans);
-	font-size: 16px;
-	font-weight: 900;
-	letter-spacing: 0.08em;
 }
 
-.brand-dot,
 .status-dot {
 	background: var(--coral);
 	box-shadow: 0 0 0 4px color-mix(in srgb, var(--coral), transparent 78%);
@@ -853,9 +868,21 @@ body {
 	letter-spacing: .08em;
 }
 
-.spectator-brand > span:last-child {
+.spectator-brand .brand-logo {
+	width: 32px;
+	height: 32px;
+}
+
+.spectator-brand .brand-wordmark {
+	font-size: 13px;
+}
+
+.spectator-brand-mode {
 	color: #9aa9be;
 	font-size: 10px;
+	font-weight: 800;
+	letter-spacing: .06em;
+	text-transform: uppercase;
 }
 
 .spectator-room {
@@ -1161,7 +1188,7 @@ body {
 @media (max-width: 720px) {
 	.spectator-shell { padding: 8px; }
 	.spectator-header { grid-template-columns: 1fr auto; padding-bottom: 8px; }
-	.spectator-brand > span:last-child { display: none; }
+	.spectator-brand-mode { display: none; }
 	.spectator-connection { display: none; }
 	.spectator-stage { width: 100%; }
 	.spectator-hud { inset: 7px 7px auto; }

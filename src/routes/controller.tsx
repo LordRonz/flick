@@ -7,6 +7,7 @@ import {
 	useState,
 } from "react";
 import { z } from "zod";
+import { BrandMark } from "../components/BrandMark";
 import "../controller/controller.css";
 import {
 	type AimSendState,
@@ -164,6 +165,26 @@ function ControllerPage() {
 		};
 	}, []);
 
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Runs once on mount; the handler and senders use stable refs.
+	useEffect(() => {
+		// Browsers without a motion permission prompt (Android, older iOS) get
+		// physical flick enabled by default. iOS 13+ keeps the button because
+		// requestPermission must be called from a user gesture.
+		if (!("DeviceMotionEvent" in window)) return;
+		if (navigator.maxTouchPoints === 0) return;
+		const motion = window.DeviceMotionEvent as typeof DeviceMotionEvent & {
+			requestPermission?: () => Promise<string>;
+		};
+		if (typeof motion.requestPermission === "function") return;
+		if (!motionListenerRef.current) {
+			motionListenerRef.current = handleMotion;
+			window.addEventListener("devicemotion", handleMotion);
+		}
+		setPermission("Enabled");
+		send({ type: "motion-status", enabled: true });
+		void wakeLockRef.current?.request();
+	}, []);
+
 	// biome-ignore lint/correctness/useExhaustiveDependencies: Sensor and socket handlers use refs; the lifecycle is keyed by room and reconnect attempt.
 	useEffect(() => {
 		if (!room) return;
@@ -192,6 +213,12 @@ function ControllerPage() {
 			backoffRef.current = 0;
 			setConnection("Connected");
 			setError("");
+			// Motion may have been auto-enabled before the socket opened (or
+			// across a reconnect), so replay the current status to the host.
+			send({
+				type: "motion-status",
+				enabled: Boolean(motionListenerRef.current),
+			});
 		};
 		socket.onmessage = (event) => {
 			if (typeof event.data !== "string") return;
@@ -524,8 +551,7 @@ function ControllerPage() {
 			<main className="controller-shell">
 				<div className="controller-card">
 					<Link to="/" className="brand-mark">
-						<span className="brand-dot" />
-						FLICK
+						<BrandMark />
 					</Link>
 					<h1>Room code missing.</h1>
 					<p>Scan the QR code from a host screen.</p>
@@ -556,8 +582,7 @@ function ControllerPage() {
 			<div className="controller-card">
 				<header className="controller-header">
 					<Link to="/" className="brand-mark">
-						<span className="brand-dot" />
-						FLICK
+						<BrandMark />
 					</Link>
 					<span
 						className={`connection-pill ${connection === "Connected" ? "is-connected" : ""}`}

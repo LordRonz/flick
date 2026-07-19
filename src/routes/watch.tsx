@@ -1,6 +1,7 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
+import { BrandMark } from "../components/BrandMark";
 import { PhaserGame } from "../components/PhaserGame";
 import { GameBridge } from "../game/bridge/GameBridge";
 import type { MatchStanding } from "../game/types";
@@ -296,8 +297,7 @@ function SpectatorPage() {
 		return (
 			<main className="empty-state spectator-empty">
 				<Link to="/" className="brand-mark">
-					<span className="brand-dot" />
-					FLICK
+					<BrandMark dark />
 				</Link>
 				<h1>Room code missing.</h1>
 				<p>Open the Spectator Display link from the host screen.</p>
@@ -314,9 +314,8 @@ function SpectatorPage() {
 		<main ref={stageRef} className={`spectator-shell phase-${phase}`}>
 			<header className="spectator-header">
 				<div className="spectator-brand">
-					<span className="brand-dot" />
-					<strong>FLICK ARENA</strong>
-					<span>OFFICE MAYHEM</span>
+					<BrandMark dark />
+					<span className="spectator-brand-mode">Office Mayhem</span>
 				</div>
 				<div className="spectator-room">
 					<span>ROOM</span>
