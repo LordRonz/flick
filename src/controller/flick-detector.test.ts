@@ -6,6 +6,7 @@ import {
 	type FlickDetectorState,
 	forwardAccelerationMagnitude,
 	INITIAL_GRAVITY_FILTER,
+	parseFlickSensitivity,
 	removeGravity,
 } from "./flick-detector";
 
@@ -79,6 +80,13 @@ describe("flick detector", () => {
 				FLICK_SENSITIVITY_CONFIG.low,
 			).flicked,
 		).toBe(false);
+	});
+
+	it("restores only valid saved sensitivity values", () => {
+		expect(parseFlickSensitivity("low")).toBe("low");
+		expect(parseFlickSensitivity("high")).toBe("high");
+		expect(parseFlickSensitivity("turbo")).toBe("normal");
+		expect(parseFlickSensitivity(null)).toBe("normal");
 	});
 
 	it("reaches full intensity on sensors clamped near ±2g", () => {

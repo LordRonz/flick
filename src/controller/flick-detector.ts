@@ -2,6 +2,11 @@ import { clamp } from "../game/systems/math";
 
 export type FlickSensitivity = "low" | "normal" | "high";
 
+export function parseFlickSensitivity(value: string | null): FlickSensitivity {
+	if (value === "low" || value === "normal" || value === "high") return value;
+	return "normal";
+}
+
 export type FlickDetectorConfig = {
 	spikeThreshold: number;
 	cooldownMs: number;
@@ -120,8 +125,7 @@ export function detectFlick(
 			config.maxIntensityMagnitude,
 		);
 		const intensity = clamp(
-			(peak - config.spikeThreshold) /
-				(effectiveMax - config.spikeThreshold),
+			(peak - config.spikeThreshold) / (effectiveMax - config.spikeThreshold),
 			0,
 			1,
 		);

@@ -314,7 +314,28 @@
 .sensitivity-control {
 	display: grid;
 	gap: 8px;
-	margin: 12px 0 4px;
+	min-width: 0;
+	margin: 12px 0 14px;
+	padding: 12px;
+	border: 1px solid var(--line);
+	border-radius: 9px;
+	background: var(--surface-raised);
+}
+
+.sensitivity-control legend {
+	padding: 0 4px;
+	color: var(--ink);
+	font-family: var(--mono);
+	font-size: 10px;
+	font-weight: 900;
+	letter-spacing: 0.1em;
+}
+
+.sensitivity-control p {
+	margin: 0;
+	color: #4a5870;
+	font-size: 11px;
+	line-height: 1.4;
 }
 
 .sensitivity-control > div {
@@ -324,18 +345,22 @@
 }
 
 .sensitivity-button {
-	min-height: 32px;
+	min-height: 44px;
 	color: var(--muted);
-	border: 1px solid var(--line);
-	background: transparent;
+	border: 2px solid var(--line);
+	border-radius: 7px;
+	background: var(--surface);
 	font-family: var(--mono);
-	font-size: 9px;
+	font-size: 10px;
+	font-weight: 850;
 }
 
 .sensitivity-button.is-selected {
 	color: var(--ink);
-	border-color: var(--mint);
+	border-color: var(--ink);
 	background: var(--mint);
+	box-shadow: 0 3px 0 var(--ink);
+	transform: translateY(-2px);
 }
 
 @media (max-width: 560px) {

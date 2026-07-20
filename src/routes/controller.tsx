@@ -22,6 +22,7 @@ import {
 	forwardAccelerationMagnitude,
 	type GravityFilterState,
 	INITIAL_GRAVITY_FILTER,
+	parseFlickSensitivity,
 	removeGravity,
 } from "../controller/flick-detector";
 import {
@@ -56,6 +57,7 @@ export const Route = createFileRoute("/controller")({
 
 type PermissionState = "Not enabled" | "Enabled" | "Denied" | "Unsupported";
 type ThrowSource = FlickSource;
+const FLICK_SENSITIVITY_STORAGE_KEY = "flick-sensitivity:v1";
 
 function ControllerPage() {
 	const { room } = Route.useSearch();
@@ -120,6 +122,19 @@ function ControllerPage() {
 
 	phaseRef.current = phase;
 	sensitivityRef.current = sensitivity;
+
+	useEffect(() => {
+		try {
+			const stored = parseFlickSensitivity(
+				window.localStorage.getItem(FLICK_SENSITIVITY_STORAGE_KEY),
+			);
+			sensitivityRef.current = stored;
+			setSensitivity(stored);
+		} catch {
+			// Storage may be unavailable in private browsing. The setting still
+			// works for the lifetime of this controller page.
+		}
+	}, []);
 
 	useEffect(() => {
 		if (!error) return;
@@ -528,6 +543,20 @@ function ControllerPage() {
 		});
 	}
 
+	function updateFlickSensitivity(next: FlickSensitivity) {
+		sensitivityRef.current = next;
+		setSensitivity(next);
+		detectorRef.current = {
+			lastFlickAt: detectorRef.current.lastFlickAt,
+		};
+		try {
+			window.localStorage.setItem(FLICK_SENSITIVITY_STORAGE_KEY, next);
+		} catch {
+			// Keep the in-memory setting when persistent storage is unavailable.
+		}
+		showConfirmation(`SENSITIVITY ${next.toUpperCase()}`);
+	}
+
 	function toggleReady() {
 		if (!assignment) return;
 		const next = !ready;
@@ -676,6 +705,33 @@ function ControllerPage() {
 						Keep a firm grip and leave space around you.
 					</p>
 				) : null}
+
+				<fieldset
+					className="sensitivity-control"
+					aria-describedby="flick-sensitivity-help"
+				>
+					<legend>FLICK SENSITIVITY</legend>
+					<p id="flick-sensitivity-help">
+						Choose High if lighter phone motions are not registering.
+					</p>
+					<div>
+						{(["low", "normal", "high"] as FlickSensitivity[]).map((option) => (
+							<button
+								key={option}
+								type="button"
+								className={
+									option === sensitivity
+										? "sensitivity-button is-selected"
+										: "sensitivity-button"
+								}
+								aria-pressed={option === sensitivity}
+								onClick={() => updateFlickSensitivity(option)}
+							>
+								{option.toUpperCase()}
+							</button>
+						))}
+					</div>
+				</fieldset>
 
 				<section className="controller-throw">
 					<button
@@ -830,27 +886,6 @@ function ControllerPage() {
 								/>
 							</>
 						) : null}
-						<div className="sensitivity-control">
-							<span className="panel-label">FLICK SENSITIVITY</span>
-							<div>
-								{(["low", "normal", "high"] as FlickSensitivity[]).map(
-									(option) => (
-										<button
-											key={option}
-											type="button"
-											className={
-												option === sensitivity
-													? "sensitivity-button is-selected"
-													: "sensitivity-button"
-											}
-											onClick={() => setSensitivity(option)}
-										>
-											{option.toUpperCase()}
-										</button>
-									),
-								)}
-							</div>
-						</div>
 						<button
 							className="debug-test-button"
 							type="button"
