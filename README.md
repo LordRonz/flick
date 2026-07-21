@@ -62,6 +62,16 @@ pnpm deploy
 
 The host game uses Phaser `4.2.1` with Phaser Matter Physics. Phaser is imported and initialized only from the client-side effect in `src/components/PhaserGame.tsx`; it is not part of the SSR execution path.
 
+## AI-assisted development
+
+Flick Arena was built through a human-directed, AI-assisted workflow using GPT-5.6 in two complementary environments.
+
+**GPT-5.6 Sol in ChatGPT** was used as a collaborative thinking partner during the early and iterative design stages. It helped explore the initial concept, brainstorm game mechanics and player interactions, compare technical approaches, identify edge cases, and turn ideas into practical implementation plans. This included reasoning about the host/controller experience, multiplayer room behavior, mobile-device constraints, and the overall structure of the game.
+
+**GPT-5.6 in Codex** was used for hands-on implementation inside the codebase. Working from those ideas and plans, Codex created and modified the application code, connected the game and controller flows, implemented supporting systems, investigated problems, and ran relevant development checks while refining the result.
+
+The process was iterative rather than a single generated output: ideas developed in ChatGPT informed the implementation in Codex, and discoveries made during implementation fed back into further planning and refinement. The project remained human-guided throughout—its goals, creative direction, constraints, trade-offs, and final decisions were directed and reviewed by the developer.
+
 ## Local art and audio
 
 Arena sprites, props, projectiles, debris, and impact particles are generated locally at boot by `src/game/art/createProceduralTextures.ts`. The UI uses system fonts and CSS shapes, so the game does not depend on remote art or font CDNs.
