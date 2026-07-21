@@ -33,6 +33,7 @@ import { playUiCue } from "../game/audio/ArcadeAudio";
 import { STATIONS } from "../game/config/arena";
 import { type FlickSource, THROW_COOLDOWN_MS } from "../game/config/controls";
 import { nextProjectileType } from "../game/config/projectiles";
+import { playerLabel } from "../game/solo-bot";
 import { mapAimAngle } from "../game/systems/aim";
 import { clamp } from "../game/systems/math";
 import { buildRoundAwards, successfulThrowRate } from "../game/systems/results";
@@ -640,7 +641,7 @@ function ControllerPage() {
 	);
 	const leaderCopy =
 		phase === "playing" && leaderState.playerNumber
-			? `${leaderState.playerId === assignment?.playerId ? "YOU" : `P${leaderState.playerNumber}`} · ${leaderState.bountyActive ? "TARGET +25" : "LEADER"}`
+			? `${leaderState.playerId === assignment?.playerId ? "YOU" : playerLabel({ playerId: leaderState.playerId ?? "", playerNumber: leaderState.playerNumber })} · ${leaderState.bountyActive ? "TARGET +25" : "LEADER"}`
 			: phase.toUpperCase();
 
 	return (

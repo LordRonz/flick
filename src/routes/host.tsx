@@ -21,6 +21,14 @@ import {
 } from "../game/audio/ArcadeAudio";
 import { GameBridge } from "../game/bridge/GameBridge";
 import type { GameToReactEvent } from "../game/bridge/game-events";
+import {
+	createSoloBot,
+	createSoloBotMove,
+	isSoloBot,
+	playerLabel,
+	SOLO_BOT_AIM_LEAD_MS,
+	shouldRemoveSoloBot,
+} from "../game/solo-bot";
 import { buildRoundAwards, successfulThrowRate } from "../game/systems/results";
 import { isLeaderBountyActive, uniqueLeaderId } from "../game/systems/scoring";
 import type {
@@ -71,6 +79,7 @@ function HostPage() {
 	const phaseRef = useRef<MatchPhase>("lobby");
 	const [socketState, setSocketState] = useState("Connecting");
 	const [players, setPlayers] = useState<LobbyPlayer[]>([]);
+	const [soloBot, setSoloBot] = useState<LobbyPlayer | null>(null);
 	const [scores, setScores] = useState<Record<string, number>>({});
 	const [phase, setPhase] = useState<MatchPhase>("lobby");
 	const [timeRemainingMs, setTimeRemainingMs] = useState(0);
@@ -276,7 +285,48 @@ function HostPage() {
 			document.removeEventListener("fullscreenchange", handleFullscreenChange);
 	}, []);
 
-	const connectedPlayers = players.filter((player) => player.connected);
+	useEffect(() => {
+		if (!soloBot) return;
+		const connectedHumans = players.filter((player) => player.connected);
+		if (!shouldRemoveSoloBot(soloBot, connectedHumans)) return;
+		bridgeRef.current.send({ type: "player-left", playerId: soloBot.playerId });
+		setSoloBot(null);
+	}, [players, soloBot]);
+
+	useEffect(() => {
+		if (!soloBot || phase !== "playing") return;
+		let active = true;
+		let timer: number | undefined;
+		const takeTurn = () => {
+			const move = createSoloBotMove();
+			bridgeRef.current.send({
+				type: "aim",
+				playerId: soloBot.playerId,
+				normalizedAim: move.normalizedAim,
+			});
+			timer = window.setTimeout(() => {
+				if (!active) return;
+				bridgeRef.current.send({
+					type: "flick",
+					playerId: soloBot.playerId,
+					intensity: move.intensity,
+					source: "button",
+				});
+				timer = window.setTimeout(takeTurn, move.delayMs);
+			}, SOLO_BOT_AIM_LEAD_MS);
+		};
+		timer = window.setTimeout(takeTurn, 400);
+		return () => {
+			active = false;
+			if (timer) window.clearTimeout(timer);
+		};
+	}, [phase, soloBot]);
+
+	const humanConnectedPlayers = players.filter((player) => player.connected);
+	const displayPlayers = soloBot
+		? [...players, soloBot].sort((a, b) => a.playerNumber - b.playerNumber)
+		: players;
+	const connectedPlayers = displayPlayers.filter((player) => player.connected);
 	const connectedPlayerKey = connectedPlayers
 		.map((player) => player.playerId)
 		.sort()
@@ -338,15 +388,33 @@ function HostPage() {
 	function startMatch() {
 		const connected = players.filter((player) => player.connected);
 		const ready = connected.filter((player) => player.ready);
-		const hasEnoughPlayers = isDevelopment || connected.length >= 2;
 		const allPlayersReady =
-			connected.length < 2 || ready.length === connected.length;
-		if (!hasEnoughPlayers || !allPlayersReady) return;
+			connected.length > 0 && ready.length === connected.length;
+		if (connected.length === 0 && !isDevelopment) return;
+		if (connected.length > 0 && !allPlayersReady) return;
+		if (connected.length === 1) {
+			const bot = createSoloBot(connected);
+			if (!bot) return;
+			bridgeRef.current.send({ type: "player-joined", player: bot });
+			bridgeRef.current.send({
+				type: "player-ready",
+				playerId: bot.playerId,
+				ready: true,
+			});
+			setSoloBot(bot);
+		}
 		bridgeRef.current.send({ type: "start-match" });
 	}
 
 	function resetMatch() {
 		bridgeRef.current.send({ type: "reset-match" });
+		if (soloBot) {
+			bridgeRef.current.send({
+				type: "player-left",
+				playerId: soloBot.playerId,
+			});
+			setSoloBot(null);
+		}
 		setStandings([]);
 	}
 
@@ -410,39 +478,23 @@ function HostPage() {
 	}
 
 	if (!room) return <EmptyRoom />;
-	const connectedCount = connectedPlayers.length;
-	const readyCount = connectedPlayers.filter((player) => player.ready).length;
+	const connectedCount = humanConnectedPlayers.length;
+	const readyCount = humanConnectedPlayers.filter(
+		(player) => player.ready,
+	).length;
 	const allPlayersReady = connectedCount > 0 && readyCount === connectedCount;
 	const seconds = Math.ceil(timeRemainingMs / 1000);
 	const canStart =
 		phase === "lobby" &&
-		(isDevelopment
-			? connectedCount < 2 || allPlayersReady
-			: connectedCount >= 2 && allPlayersReady);
-	const startLabel =
-		connectedCount < 2 && !isDevelopment
-			? "Need 2 Players"
-			: !canStart
-				? `Waiting for ${connectedCount - readyCount}`
-				: "Start Round";
-	const readinessCopy =
-		isDevelopment && connectedCount < 2
-			? "Start now or wait for more players to join."
-			: connectedCount === 0
-				? "Waiting for players. Scan the QR code to join."
-				: connectedCount < 2
-					? "One more player is needed for a full match."
-					: allPlayersReady
-						? "Everyone’s ready. Start when the room is watching."
-						: `${readyCount} of ${connectedCount} players ready.`;
-	const readinessHeading =
-		isDevelopment && connectedCount < 2
-			? "Start when ready"
-			: connectedCount === 0
-				? "Waiting for players"
-				: allPlayersReady
-					? "Room ready"
-					: `${readyCount} of ${connectedCount} ready`;
+		((connectedCount >= 1 && allPlayersReady) ||
+			(isDevelopment && connectedCount === 0));
+	const { startLabel, readinessCopy, readinessHeading } =
+		buildLobbyPresentation({
+			connectedCount,
+			readyCount,
+			allPlayersReady,
+			isDevelopment,
+		});
 	const finalMoments = phase === "playing" && seconds <= 10;
 	return (
 		<main
@@ -472,7 +524,7 @@ function HostPage() {
 								<strong>{room}</strong>
 							</div>
 							<section className="arena-scoreboard" aria-label="Scoreboard">
-								{players
+								{displayPlayers
 									.filter((player) => player.connected)
 									.map((player) => (
 										<ScoreCard
@@ -483,7 +535,7 @@ function HostPage() {
 											bountyLive={leaderBountyLive}
 										/>
 									))}
-								{connectedCount === 0 ? (
+								{connectedPlayers.length === 0 ? (
 									<span className="arena-waiting-copy">
 										Waiting for players
 									</span>
@@ -613,20 +665,21 @@ function HostPage() {
 					<div className="lobby-summary">
 						<strong>Players</strong>
 						<span>
-							{connectedCount} joined · {readyCount} ready
+							{connectedCount} {connectedCount === 1 ? "phone" : "phones"} ·{" "}
+							{readyCount} ready{soloBot ? " · Bot active" : ""}
 						</span>
 					</div>
 					<div className="lobby-players">
-						{players.map((player) => (
+						{displayPlayers.map((player) => (
 							<LobbyRow
 								key={player.playerId}
 								player={player}
 								score={scores[player.playerId] ?? 0}
 							/>
 						))}
-						{players.length === 0 ? (
+						{displayPlayers.length === 0 ? (
 							<p className="rail-hint">
-								Waiting for players. A game needs two ready phones.
+								Waiting for a player. One ready phone can play against the bot.
 							</p>
 						) : null}
 					</div>
@@ -711,6 +764,52 @@ function HostPage() {
 			</section>
 		</main>
 	);
+}
+
+function buildLobbyPresentation({
+	connectedCount,
+	readyCount,
+	allPlayersReady,
+	isDevelopment,
+}: {
+	connectedCount: number;
+	readyCount: number;
+	allPlayersReady: boolean;
+	isDevelopment: boolean;
+}) {
+	if (connectedCount === 0)
+		return isDevelopment
+			? {
+					startLabel: "Start Round",
+					readinessHeading: "Start when ready",
+					readinessCopy: "Start now or wait for more players to join.",
+				}
+			: {
+					startLabel: "Need a Player",
+					readinessHeading: "Waiting for players",
+					readinessCopy: "Waiting for players. Scan the QR code to join.",
+				};
+	if (!allPlayersReady)
+		return {
+			startLabel: `Waiting for ${connectedCount - readyCount}`,
+			readinessHeading: `${readyCount} of ${connectedCount} ready`,
+			readinessCopy:
+				connectedCount === 1
+					? "Ready up to play solo against the bot."
+					: `${readyCount} of ${connectedCount} players ready.`,
+		};
+	if (connectedCount === 1)
+		return {
+			startLabel: "Start vs Bot",
+			readinessHeading: "Solo match ready",
+			readinessCopy:
+				"Ready to face the office bot. A second phone can still join instead.",
+		};
+	return {
+		startLabel: "Start Round",
+		readinessHeading: "Room ready",
+		readinessCopy: "Everyone’s ready. Start when the room is watching.",
+	};
 }
 
 function handleGameEvent(
@@ -848,7 +947,7 @@ function ScoreCard({
 		<div
 			className={`score-card color-${player.color} ${isLeader ? "is-leader" : ""}`}
 		>
-			<span className="score-card-player">P{player.playerNumber}</span>
+			<span className="score-card-player">{playerLabel(player)}</span>
 			<strong>{score.toString().padStart(3, "0")}</strong>
 			{isLeader ? (
 				<span className="leader-badge">
@@ -861,15 +960,22 @@ function ScoreCard({
 }
 
 function LobbyRow({ player, score }: { player: LobbyPlayer; score: number }) {
+	const bot = isSoloBot(player.playerId);
 	return (
 		<div className={`lobby-row color-${player.color}`}>
-			<span className="player-badge">P{player.playerNumber}</span>
+			<span className="player-badge">
+				{bot ? "AI" : `P${player.playerNumber}`}
+			</span>
 			<div>
-				<strong>{player.color.toUpperCase()} PLAYER</strong>
+				<strong>
+					{bot ? "OFFICE BOT" : `${player.color.toUpperCase()} PLAYER`}
+				</strong>
 				<small>
-					{player.connected
-						? `${player.motionEnabled ? "PHYSICAL FLICK" : "BUTTON THROW"} · ${player.ready ? "READY" : "NOT READY"}`
-						: "RECONNECTING"}
+					{bot
+						? "CASUAL CPU · READY"
+						: player.connected
+							? `${player.motionEnabled ? "PHYSICAL FLICK" : "BUTTON THROW"} · ${player.ready ? "READY" : "NOT READY"}`
+							: "RECONNECTING"}
 				</small>
 			</div>
 			<span className="lobby-score">{score}</span>
@@ -923,7 +1029,7 @@ function ResultsOverlay({
 	const winners = standings.filter((standing) => standing.rank === 1);
 	const sharedWin = winners.length > 1;
 	const winnerLabel = winners
-		.map((standing) => `P${standing.playerNumber}`)
+		.map((standing) => playerLabel(standing))
 		.join(" + ");
 	const awards = buildRoundAwards(standings);
 	const nextPlace = standings.find((standing) => standing.rank > 1);
@@ -942,7 +1048,7 @@ function ResultsOverlay({
 					className={`winner-mascot color-${winner?.color ?? "blue"}`}
 					aria-hidden="true"
 				>
-					<span>{sharedWin ? "TIE" : `P${winner?.playerNumber}`}</span>
+					<span>{sharedWin ? "TIE" : winner ? playerLabel(winner) : ""}</span>
 				</div>
 				<div className="results-confetti" aria-hidden="true">
 					{CONFETTI_PIECES.map((piece) => (
@@ -962,8 +1068,8 @@ function ResultsOverlay({
 					</p>
 				) : nextPlace ? (
 					<p className="results-rematch-copy">
-						Only {scoreGap} points separated {winnerLabel} and P
-						{nextPlace.playerNumber}.
+						Only {scoreGap} points separated {winnerLabel} and{" "}
+						{playerLabel(nextPlace)}.
 					</p>
 				) : null}
 				<ol className="results-list" aria-label="Final ranking">
@@ -973,7 +1079,7 @@ function ResultsOverlay({
 							className={`result-row color-${standing.color}`}
 						>
 							<strong>
-								#{standing.rank} · P{standing.playerNumber}
+								#{standing.rank} · {playerLabel(standing)}
 							</strong>
 							<span>{standing.score} pts</span>
 							<small>
@@ -992,7 +1098,7 @@ function ResultsOverlay({
 								key={`${award.label}-${award.playerId}`}
 								className={`result-award color-${award.color}`}
 							>
-								<span>P{award.playerNumber}</span>
+								<span>{playerLabel(award)}</span>
 								<strong>{award.label}</strong>
 								<small>{award.detail}</small>
 							</div>
