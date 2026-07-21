@@ -16,13 +16,13 @@ export const STATIONS: Record<PlayerNumber, Station> = {
 	1: {
 		playerNumber: 1,
 		x: 160,
-		y: 610,
+		y: 555,
 		aim: { minAngle: -1.35, maxAngle: -0.18, defaultAngle: -0.78 },
 	},
 	2: {
 		playerNumber: 2,
 		x: 1120,
-		y: 610,
+		y: 555,
 		aim: {
 			minAngle: -2.96,
 			maxAngle: -1.79,
@@ -50,7 +50,7 @@ export const STATIONS: Record<PlayerNumber, Station> = {
 };
 
 export const PLATFORM_LAYOUT = [
-	{ x: 640, y: 688, width: 1180, height: 34 },
+	{ x: 640, y: 624, width: 1240, height: 34 },
 	{ x: 640, y: 68, width: 1180, height: 22 },
 	{ x: 408, y: 420, width: 310, height: 20 },
 	{ x: 876, y: 420, width: 310, height: 20 },

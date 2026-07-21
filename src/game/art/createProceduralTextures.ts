@@ -32,6 +32,18 @@ export function createProceduralTextures(scene: Phaser.Scene) {
 		g.fillStyle(0x45b85d).fillEllipse(7, 5, 14, 8);
 		g.lineStyle(1, 0x17713a).lineBetween(2, 7, 12, 3);
 	});
+	createTexture(scene, "fx-smoke", 28, 28, (g) => {
+		g.fillStyle(0x33415e, 0.82)
+			.fillCircle(9, 16, 8)
+			.fillCircle(16, 10, 9)
+			.fillCircle(21, 17, 7);
+		g.fillStyle(0x718096, 0.55).fillCircle(13, 9, 4);
+	});
+	createTexture(scene, "fx-flare", 24, 24, (g) => {
+		g.fillStyle(0xff6b35).fillCircle(12, 12, 11);
+		g.fillStyle(0xffca3a).fillCircle(12, 12, 7);
+		g.fillStyle(0xfffbef).fillCircle(12, 12, 3);
+	});
 
 	createTexture(scene, "projectile-paper-ball", 34, 34, (g) => {
 		g.fillStyle(ARCADE_COLORS.ink, 0.18).fillCircle(18, 19, 14);

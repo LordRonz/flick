@@ -68,6 +68,70 @@ describe("realtime protocol", () => {
 		).toBe("assignment");
 	});
 
+	it("validates gameplay bonus feedback", () => {
+		expect(
+			HostMessageSchema.safeParse({
+				type: "hit-confirmed",
+				attackerPlayerId: "00000000-0000-4000-8000-000000000001",
+				targetPlayerId: "00000000-0000-4000-8000-000000000002",
+				score: 100,
+				bankShot: true,
+				leaderBounty: true,
+			}).success,
+		).toBe(true);
+		expect(
+			HostMessageSchema.safeParse({
+				type: "prop-hit-confirmed",
+				playerId: "00000000-0000-4000-8000-000000000001",
+				propType: "printer",
+				score: 20,
+				destroyed: false,
+			}).success,
+		).toBe(true);
+	});
+
+	it("validates the live leader bounty state", () => {
+		expect(
+			HostMessageSchema.safeParse({
+				type: "leader-state",
+				leaderPlayerId: "00000000-0000-4000-8000-000000000002",
+				leaderPlayerNumber: 2,
+				bountyActive: true,
+			}).success,
+		).toBe(true);
+	});
+
+	it("requires the extended round stats used by results awards", () => {
+		const result = {
+			type: "round-result",
+			standings: [
+				{
+					playerId: "00000000-0000-4000-8000-000000000001",
+					playerNumber: 1,
+					color: "blue",
+					rank: 1,
+					score: 250,
+					throws: 10,
+					playerHits: 4,
+					successfulThrows: 3,
+					bankShots: 1,
+					leaderHits: 2,
+					propHits: 3,
+					propsDestroyed: 1,
+				},
+			],
+		};
+		expect(HostMessageSchema.safeParse(result).success).toBe(true);
+		expect(
+			HostMessageSchema.safeParse({
+				...result,
+				standings: result.standings.map(
+					({ successfulThrows: _, ...standing }) => standing,
+				),
+			}).success,
+		).toBe(false);
+	});
+
 	it("allows only sync and ping messages from spectators", () => {
 		expect(
 			parseJsonMessage('{"type":"request-sync"}', SpectatorToRoomMessageSchema),

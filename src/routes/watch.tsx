@@ -4,6 +4,8 @@ import { z } from "zod";
 import { BrandMark } from "../components/BrandMark";
 import { PhaserGame } from "../components/PhaserGame";
 import { GameBridge } from "../game/bridge/GameBridge";
+import { buildRoundAwards, successfulThrowRate } from "../game/systems/results";
+import { isLeaderBountyActive, uniqueLeaderId } from "../game/systems/scoring";
 import type { MatchStanding } from "../game/types";
 import {
 	RoomToSpectatorMessageSchema,
@@ -309,6 +311,14 @@ function SpectatorPage() {
 	);
 	const phase = snapshot?.phase ?? "lobby";
 	const seconds = Math.max(0, Math.ceil(displayedTimeMs / 1000));
+	const leaderId = uniqueLeaderId(
+		(snapshot?.players ?? []).map((player) => ({
+			playerId: player.playerId,
+			score: scores.get(player.playerId) ?? 0,
+		})),
+	);
+	const leaderBountyLive =
+		phase === "playing" && isLeaderBountyActive(displayedTimeMs);
 
 	return (
 		<main ref={stageRef} className={`spectator-shell phase-${phase}`}>
@@ -336,14 +346,20 @@ function SpectatorPage() {
 						{snapshot?.players.map((player) => (
 							<div
 								key={player.playerId}
-								className={`spectator-score color-${player.color}`}
+								className={`spectator-score color-${player.color} ${player.playerId === leaderId ? "is-leader" : ""}`}
 							>
-								<span>P{player.playerNumber}</span>
+								<span>
+									{player.playerId === leaderId ? "♛ " : ""}P
+									{player.playerNumber}
+								</span>
 								<strong>
 									{(scores.get(player.playerId) ?? 0)
 										.toString()
 										.padStart(3, "0")}
 								</strong>
+								{player.playerId === leaderId ? (
+									<small>{leaderBountyLive ? "TARGET +25" : "LEADER"}</small>
+								) : null}
 							</div>
 						))}
 					</div>
@@ -465,10 +481,17 @@ function SpectatorPage() {
 
 function SpectatorResults({ standings }: { standings: MatchStanding[] }) {
 	const winner = standings[0];
+	const winners = standings.filter((standing) => standing.rank === 1);
+	const winnerLabel = winners
+		.map((standing) => `P${standing.playerNumber}`)
+		.join(" + ");
+	const awards = buildRoundAwards(standings);
 	return (
 		<div className="spectator-results">
 			<span className="spectator-kicker">OFFICE MAYHEM COMPLETE</span>
-			<h1>P{winner?.playerNumber} wins!</h1>
+			<h1>
+				{winners.length > 1 ? `${winnerLabel} tie!` : `${winnerLabel} wins!`}
+			</h1>
 			<p>{winner?.score ?? 0} points</p>
 			<ol>
 				{standings.map((standing) => (
@@ -477,9 +500,25 @@ function SpectatorResults({ standings }: { standings: MatchStanding[] }) {
 							#{standing.rank} · P{standing.playerNumber}
 						</strong>
 						<span>{standing.score} pts</span>
+						<small>
+							{Math.round(successfulThrowRate(standing) * 100)}% connected
+						</small>
 					</li>
 				))}
 			</ol>
+			{awards.length ? (
+				<div className="spectator-awards">
+					{awards.map((award) => (
+						<div
+							key={`${award.label}-${award.playerId}`}
+							className={`color-${award.color}`}
+						>
+							<span>P{award.playerNumber}</span>
+							<strong>{award.label}</strong>
+						</div>
+					))}
+				</div>
+			) : null}
 			<small>Waiting for host to start the next round</small>
 		</div>
 	);

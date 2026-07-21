@@ -29,7 +29,16 @@ import { PROP_DEFINITIONS, PROP_LAYOUT } from "../config/props";
 import { ArcadeEffects } from "../effects/ArcadeEffects";
 import { launchVelocity, mapAimAngle, smoothAim } from "../systems/aim";
 import { clamp } from "../systems/math";
-import { canScoreAgainst, hitScore, propScore } from "../systems/scoring";
+import { rankStandings } from "../systems/results";
+import {
+	canScoreAgainst,
+	hitBonusLabels,
+	isLeaderBountyActive,
+	MATCH_DURATION_MS,
+	playerHitScore,
+	propHitScore,
+	uniqueLeaderId,
+} from "../systems/scoring";
 import type {
 	GameMode,
 	MatchPhase,
@@ -60,6 +69,8 @@ const PROJECTILE_AUDIO: Record<
 	"paper-ball": { throw: "paper-throw", impact: "light-impact" },
 	"coffee-mug": { throw: "mug-throw", impact: "medium-impact" },
 	stapler: { throw: "stapler-throw", impact: "heavy-impact" },
+	bomb: { throw: "stapler-throw", impact: "heavy-impact" },
+	superball: { throw: "paper-throw", impact: "platform-impact" },
 };
 
 type ProjectileMetadata = {
@@ -69,8 +80,11 @@ type ProjectileMetadata = {
 	practice: boolean;
 	createdAt: number;
 	scoredPlayerIds: Set<string>;
-	destroyedPropIds: Set<string>;
+	scoredPropIds: Set<string>;
 	lastWorldImpactAt: number;
+	worldBounceCount: number;
+	detonated: boolean;
+	creditedSuccessfulThrow: boolean;
 };
 
 type ProjectileState = {
@@ -82,6 +96,7 @@ type PropState = {
 	propId: string;
 	type: PropType;
 	body: Phaser.Physics.Matter.Image;
+	shadow: Phaser.GameObjects.Ellipse;
 	health: number;
 	destroyed: boolean;
 };
@@ -228,6 +243,14 @@ export class ArenaScene extends Phaser.Scene {
 				PROJECTILE_DEFINITIONS[projectile.metadata.projectileType];
 			const body = projectile.body;
 			this.effects?.trail(body, projectile.metadata.projectileType, now);
+			if (
+				projectile.metadata.projectileType === "bomb" &&
+				definition.fuseMs !== undefined &&
+				now - projectile.metadata.createdAt >= definition.fuseMs
+			) {
+				this.detonateBomb(projectileId);
+				continue;
+			}
 			const tooOld =
 				this.time.now - projectile.metadata.createdAt > definition.lifetimeMs;
 			const tooFar =
@@ -236,6 +259,27 @@ export class ArenaScene extends Phaser.Scene {
 				body.y < -160 ||
 				body.y > GAME_HEIGHT + 160;
 			if (tooOld || tooFar) this.destroyProjectile(projectileId);
+		}
+		for (const prop of this.props.values()) {
+			const definition = PROP_DEFINITIONS[prop.type];
+			if (definition.isStatic || prop.destroyed) continue;
+			prop.shadow.setPosition(
+				prop.body.x,
+				prop.body.y + definition.renderHeight * 0.46,
+			);
+			const velocityX = prop.body.body?.velocity.x ?? 0;
+			const velocityY = prop.body.body?.velocity.y ?? 0;
+			const speed = Math.hypot(velocityX, velocityY);
+			if (speed > 12)
+				prop.body.setVelocity(
+					(velocityX / speed) * 12,
+					(velocityY / speed) * 12,
+				);
+			const angularVelocity =
+				(prop.body.body as { angularVelocity?: number } | undefined)
+					?.angularVelocity ?? 0;
+			if (Math.abs(angularVelocity) > 0.22)
+				prop.body.setAngularVelocity(Math.sign(angularVelocity) * 0.22);
 		}
 		if (this.performanceText && now - this.lastPerformanceUpdate > 500) {
 			this.lastPerformanceUpdate = now;
@@ -255,96 +299,12 @@ export class ArenaScene extends Phaser.Scene {
 	}
 
 	private buildArena() {
-		const background = this.add.graphics().setDepth(-10);
-		background.fillStyle(ARCADE_COLORS.sky).fillRect(0, 0, GAME_WIDTH, 350);
-		background.fillStyle(ARCADE_COLORS.skyLight).fillCircle(1080, 80, 78);
-		for (let index = 0; index < 12; index += 1) {
-			const width = 58 + (index % 3) * 22;
-			const height = 70 + (index % 4) * 28;
-			const x = index * 118 - 20;
-			background
-				.fillStyle(index % 2 ? 0x6ba7ca : 0x5795bb)
-				.fillRect(x, 350 - height, width, height);
-			background.fillStyle(0xdff6ff, 0.72);
-			for (let y = 294; y < 338; y += 15)
-				for (let wx = x + 10; wx < x + width - 8; wx += 17)
-					background.fillRect(wx, y, 7, 6);
-		}
-		background.fillStyle(ARCADE_COLORS.wall).fillRect(0, 0, GAME_WIDTH, 48);
-		background.fillRect(0, 350, GAME_WIDTH, 210);
-		background
-			.fillStyle(ARCADE_COLORS.wallShade)
-			.fillRect(0, 350, GAME_WIDTH, 16);
-		background.lineStyle(10, ARCADE_COLORS.ink);
-		for (let x = 34; x < GAME_WIDTH; x += 250) {
-			background.strokeRoundedRect(x, 55, 218, 290, 8);
-			background.lineBetween(x + 109, 55, x + 109, 345);
-		}
-		background.fillStyle(ARCADE_COLORS.floor).fillRect(0, 560, GAME_WIDTH, 160);
-		background
-			.fillStyle(ARCADE_COLORS.floorDark)
-			.fillRect(0, 560, GAME_WIDTH, 18);
-		background.lineStyle(2, 0x7185a7, 0.55);
-		for (let x = -80; x <= GAME_WIDTH + 80; x += 92)
-			background.lineBetween(x, 720, x + 80, 560);
-		background.lineStyle(2, 0x465775, 0.65);
-		for (let y = 600; y <= GAME_HEIGHT; y += 40)
-			background.lineBetween(0, y, GAME_WIDTH, y);
-
 		this.add
-			.text(48, 24, "FLICK ARENA", {
-				color: "#172033",
-				fontFamily: "Arial Black, system-ui, sans-serif",
-				fontSize: "24px",
-				fontStyle: "bold",
-			})
-			.setDepth(4);
-		this.add
-			.text(260, 31, "OFFICE MAYHEM", {
-				color: "#5b6d8c",
-				fontFamily: "system-ui, sans-serif",
-				fontSize: "13px",
-				fontStyle: "bold",
-				letterSpacing: 2,
-			})
-			.setDepth(4);
+			.image(GAME_WIDTH / 2, GAME_HEIGHT / 2, "office-arena")
+			.setDisplaySize(GAME_WIDTH, GAME_HEIGHT)
+			.setDepth(-10);
 
 		for (const platform of PLATFORM_LAYOUT) {
-			const isCeiling = platform.y < 100;
-			const platformArt = this.add.graphics().setDepth(2);
-			platformArt
-				.fillStyle(ARCADE_COLORS.ink)
-				.fillRoundedRect(
-					platform.x - platform.width / 2 - 4,
-					platform.y - platform.height / 2 - 4,
-					platform.width + 8,
-					platform.height + 8,
-					7,
-				);
-			platformArt
-				.fillStyle(
-					isCeiling
-						? ARCADE_COLORS.inkSoft
-						: platform.y > 650
-							? 0x33415e
-							: 0xc7895a,
-				)
-				.fillRoundedRect(
-					platform.x - platform.width / 2,
-					platform.y - platform.height / 2,
-					platform.width,
-					platform.height,
-					5,
-				);
-			platformArt
-				.fillStyle(0xffffff, isCeiling ? 0.12 : 0.34)
-				.fillRoundedRect(
-					platform.x - platform.width / 2 + 8,
-					platform.y - platform.height / 2 + 4,
-					platform.width - 16,
-					4,
-					2,
-				);
 			this.matter.add.rectangle(
 				platform.x,
 				platform.y,
@@ -355,7 +315,7 @@ export class ArenaScene extends Phaser.Scene {
 					label: "world",
 					collisionFilter: {
 						category: COLLISION_CATEGORY.WORLD,
-						mask: COLLISION_CATEGORY.PROJECTILE,
+						mask: COLLISION_CATEGORY.PROJECTILE | COLLISION_CATEGORY.PROP,
 					},
 				},
 			);
@@ -371,7 +331,7 @@ export class ArenaScene extends Phaser.Scene {
 					label: "world",
 					collisionFilter: {
 						category: COLLISION_CATEGORY.WORLD,
-						mask: COLLISION_CATEGORY.PROJECTILE,
+						mask: COLLISION_CATEGORY.PROJECTILE | COLLISION_CATEGORY.PROP,
 					},
 				},
 			);
@@ -431,17 +391,32 @@ export class ArenaScene extends Phaser.Scene {
 				label: `prop:${propId}`,
 				shape,
 				isStatic: definition.isStatic,
-				restitution: 0.15,
+				mass: definition.mass ?? 1,
+				restitution: definition.restitution ?? 0.15,
+				friction: definition.friction ?? 0.1,
+				frictionAir: definition.frictionAir ?? 0.01,
 				collisionFilter: {
 					category: COLLISION_CATEGORY.PROP,
-					mask: COLLISION_CATEGORY.PROJECTILE,
+					mask: COLLISION_CATEGORY.PROJECTILE | COLLISION_CATEGORY.WORLD,
 				},
 			})
 			.setDepth(4);
+		body.setDisplaySize(definition.renderWidth, definition.renderHeight);
+		const shadow = this.add
+			.ellipse(
+				x,
+				y + definition.renderHeight * 0.46,
+				definition.width * 0.86,
+				12,
+				0x172033,
+				0.25,
+			)
+			.setDepth(3);
 		this.props.set(propId, {
 			propId,
 			type,
 			body,
+			shadow,
 			health: definition.maxHealth,
 			destroyed: false,
 		});
@@ -450,8 +425,7 @@ export class ArenaScene extends Phaser.Scene {
 	private handleCommand(command: ReactToGameEvent) {
 		switch (command.type) {
 			case "player-joined":
-				if (this.createPlayer(command.player))
-					this.audio.play("player-join");
+				if (this.createPlayer(command.player)) this.audio.play("player-join");
 				break;
 			case "player-left":
 				this.removePlayer(command.playerId);
@@ -703,10 +677,13 @@ export class ArenaScene extends Phaser.Scene {
 		this.clearCountdown();
 		this.phase = "playing";
 		this.audio.startSoundtrack();
-		this.matchEndsAt = this.time.now + 60_000;
+		this.matchEndsAt = this.time.now + MATCH_DURATION_MS;
 		this.lastTimerSecond = -1;
 		this.bridge.emit({ type: "phase-changed", phase: this.phase });
-		this.bridge.emit({ type: "timer-changed", timeRemainingMs: 60_000 });
+		this.bridge.emit({
+			type: "timer-changed",
+			timeRemainingMs: MATCH_DURATION_MS,
+		});
 	}
 
 	private clearCountdown() {
@@ -852,6 +829,8 @@ export class ArenaScene extends Phaser.Scene {
 				},
 			})
 			.setDepth(5);
+		if (definition.renderWidth && definition.renderHeight)
+			body.setDisplaySize(definition.renderWidth, definition.renderHeight);
 		const velocity = launchVelocity(
 			launchAngle,
 			intensity,
@@ -871,8 +850,11 @@ export class ArenaScene extends Phaser.Scene {
 			practice,
 			createdAt: this.time.now,
 			scoredPlayerIds: new Set([playerId]),
-			destroyedPropIds: new Set(),
+			scoredPropIds: new Set(),
 			lastWorldImpactAt: 0,
+			worldBounceCount: 0,
+			detonated: false,
+			creditedSuccessfulThrow: false,
 		};
 		this.projectiles.set(projectileId, { body, metadata });
 		this.audio.play(PROJECTILE_AUDIO[projectileType].throw);
@@ -960,7 +942,24 @@ export class ArenaScene extends Phaser.Scene {
 		)
 			return;
 		projectile.metadata.lastWorldImpactAt = this.time.now;
+		projectile.metadata.worldBounceCount += 1;
 		this.audio.play("platform-impact");
+		if (projectile.metadata.projectileType === "superball") {
+			this.effects?.ricochet(projectile.body.x, projectile.body.y);
+			const maxBounces = PROJECTILE_DEFINITIONS.superball.maxWorldBounces ?? 8;
+			if (projectile.metadata.worldBounceCount >= maxBounces) {
+				this.effects?.particles(
+					"dot",
+					projectile.body.x,
+					projectile.body.y,
+					12,
+					0x4cc9f0,
+					190,
+				);
+				this.destroyProjectile(projectileId);
+			}
+			return;
+		}
 		this.effects?.particles(
 			projectile.metadata.projectileType === "paper-ball" ? "paper" : "dot",
 			projectile.body.x,
@@ -969,6 +968,42 @@ export class ArenaScene extends Phaser.Scene {
 			ARCADE_COLORS.white,
 			110,
 		);
+	}
+
+	private detonateBomb(projectileId: string) {
+		const projectile = this.projectiles.get(projectileId);
+		if (
+			!projectile ||
+			projectile.metadata.projectileType !== "bomb" ||
+			projectile.metadata.detonated
+		)
+			return;
+		projectile.metadata.detonated = true;
+		const { x, y } = projectile.body;
+		this.audio.play("heavy-impact");
+		this.effects?.explosion(x, y);
+		if (!projectile.metadata.practice && this.phase === "playing") {
+			for (const [playerId, player] of this.players) {
+				if (Math.hypot(player.sprite.x - x, player.sprite.y - y) <= 155)
+					this.handlePlayerHit(projectileId, playerId);
+			}
+			for (const [propId, prop] of this.props) {
+				if (
+					!prop.destroyed &&
+					Math.hypot(prop.body.x - x, prop.body.y - y) <= 180
+				)
+					this.handlePropHit(projectileId, propId);
+			}
+		}
+		if (isUuid(projectile.metadata.ownerPlayerId))
+			this.emitSpectatorPresentation({
+				type: "bomb-exploded",
+				eventId: crypto.randomUUID(),
+				playerId: projectile.metadata.ownerPlayerId,
+				impactX: x,
+				impactY: y,
+			});
+		this.destroyProjectile(projectileId);
 	}
 
 	private handlePlayerHit(projectileId: string, targetPlayerId: string) {
@@ -985,9 +1020,29 @@ export class ArenaScene extends Phaser.Scene {
 		projectile.metadata.scoredPlayerIds.add(targetPlayerId);
 		const attacker = this.players.get(projectile.metadata.ownerPlayerId);
 		if (!attacker) return;
-		const score = hitScore(projectile.metadata.projectileType);
+		const bankShot = projectile.metadata.worldBounceCount > 0;
+		const bountyStarted = isLeaderBountyActive(
+			this.matchEndsAt - this.time.now,
+		);
+		const leaderId = bountyStarted
+			? uniqueLeaderId(
+					Array.from(this.players.values(), (player) => ({
+						playerId: player.assignment.playerId,
+						score: player.stats.score,
+					})),
+				)
+			: null;
+		const leaderBounty = leaderId === targetPlayerId;
+		const scoreBreakdown = playerHitScore(projectile.metadata.projectileType, {
+			bankShot,
+			leaderBounty,
+		});
+		const score = scoreBreakdown.totalScore;
 		attacker.stats.score += score;
 		attacker.stats.playerHits += 1;
+		this.creditSuccessfulThrow(attacker, projectile);
+		if (bankShot) attacker.stats.bankShots += 1;
+		if (leaderBounty) attacker.stats.leaderHits += 1;
 		this.audio.play(
 			PROJECTILE_AUDIO[projectile.metadata.projectileType].impact,
 		);
@@ -998,6 +1053,8 @@ export class ArenaScene extends Phaser.Scene {
 			attackerPlayerId: attacker.assignment.playerId,
 			targetPlayerId,
 			score,
+			bankShot,
+			leaderBounty,
 		});
 		if (isUuid(attacker.assignment.playerId) && isUuid(targetPlayerId))
 			this.emitSpectatorPresentation({
@@ -1007,6 +1064,8 @@ export class ArenaScene extends Phaser.Scene {
 				targetPlayerId,
 				projectileType: projectile.metadata.projectileType,
 				score,
+				bankShot,
+				leaderBounty,
 				impactX: target.sprite.x,
 				impactY: target.sprite.y,
 				impactStrength: Math.hypot(
@@ -1025,6 +1084,7 @@ export class ArenaScene extends Phaser.Scene {
 			target.sprite.y - 42,
 			score,
 			PLAYER_HEX[attacker.assignment.color],
+			hitBonusLabels({ bankShot, leaderBounty }).join(" • ") || undefined,
 		);
 		target.sprite.setTint(0xffffff);
 		this.tweens.add({
@@ -1040,6 +1100,15 @@ export class ArenaScene extends Phaser.Scene {
 		});
 	}
 
+	private creditSuccessfulThrow(
+		attacker: PlayerState,
+		projectile: ProjectileState,
+	) {
+		if (projectile.metadata.creditedSuccessfulThrow) return;
+		projectile.metadata.creditedSuccessfulThrow = true;
+		attacker.stats.successfulThrows += 1;
+	}
+
 	private handlePropHit(projectileId: string, propId: string) {
 		const projectile = this.projectiles.get(projectileId);
 		const prop = this.props.get(propId);
@@ -1049,15 +1118,39 @@ export class ArenaScene extends Phaser.Scene {
 			this.phase !== "playing" ||
 			!prop ||
 			prop.destroyed ||
-			projectile.metadata.destroyedPropIds.has(propId)
+			projectile.metadata.scoredPropIds.has(propId)
 		)
 			return;
-		projectile.metadata.destroyedPropIds.add(propId);
+		projectile.metadata.scoredPropIds.add(propId);
 		const definition = PROP_DEFINITIONS[prop.type];
-		prop.health -=
-			definition.maxHealth > 0
-				? PROJECTILE_DEFINITIONS[projectile.metadata.projectileType].propDamage
-				: 1;
+		const scoreBreakdown = propHitScore(
+			prop.type,
+			prop.health,
+			PROJECTILE_DEFINITIONS[projectile.metadata.projectileType].propDamage,
+		);
+		prop.health -= scoreBreakdown.damageApplied;
+		const attacker = this.players.get(projectile.metadata.ownerPlayerId);
+		if (attacker) {
+			attacker.stats.score += scoreBreakdown.totalScore;
+			attacker.stats.propHits += 1;
+			this.creditSuccessfulThrow(attacker, projectile);
+			if (scoreBreakdown.destroyed) attacker.stats.propsDestroyed += 1;
+			this.emitScore(attacker);
+			this.bridge.emit({
+				type: "prop-hit",
+				playerId: attacker.assignment.playerId,
+				propType: prop.type,
+				score: scoreBreakdown.totalScore,
+				destroyed: scoreBreakdown.destroyed,
+			});
+			this.effects?.score(
+				prop.body.x,
+				prop.body.y - 36,
+				scoreBreakdown.totalScore,
+				PLAYER_HEX[attacker.assignment.color],
+				scoreBreakdown.destroyed ? "SMASH" : "PROP HIT",
+			);
+		}
 		this.audio.play(
 			PROJECTILE_AUDIO[projectile.metadata.projectileType].impact,
 		);
@@ -1066,35 +1159,46 @@ export class ArenaScene extends Phaser.Scene {
 			eventId: crypto.randomUUID(),
 			propId,
 			propType: prop.type,
+			playerId: projectile.metadata.ownerPlayerId,
+			score: scoreBreakdown.totalScore,
+			destroyed: scoreBreakdown.destroyed,
 			impactX: prop.body.x,
 			impactY: prop.body.y,
 		});
 		prop.body.setTint(0xffb070);
-		prop.body.setTexture(`${definition.textureKey}-damaged`);
-		this.tweens.add({
-			targets: prop.body,
-			x: prop.body.x + 5,
-			duration: 55,
-			yoyo: true,
-			repeat: 2,
-			onComplete: () => {
-				if (!prop.destroyed) prop.body.setTint(0xd6ad96);
-			},
-		});
+		if (definition.isStatic) {
+			this.tweens.add({
+				targets: prop.body,
+				x: prop.body.x + 5,
+				duration: 55,
+				yoyo: true,
+				repeat: 2,
+				onComplete: () => {
+					if (!prop.destroyed) prop.body.setTint(0xf0d4c0);
+				},
+			});
+		} else {
+			const impactVelocity = projectile.body.body?.velocity;
+			prop.body.setVelocity(
+				(prop.body.body?.velocity.x ?? 0) + (impactVelocity?.x ?? 0) * 0.42,
+				(prop.body.body?.velocity.y ?? 0) +
+					(impactVelocity?.y ?? 0) * 0.28 -
+					1.5,
+			);
+			prop.body.setAngularVelocity(Phaser.Math.FloatBetween(-0.16, 0.16));
+			this.time.delayedCall(180, () => {
+				if (!prop.destroyed) prop.body.setTint(0xf0d4c0);
+			});
+		}
 		this.effects?.particles("dot", prop.body.x, prop.body.y, 7, 0xffb070);
-		if (prop.health > 0) return;
+		if (!scoreBreakdown.destroyed) return;
 		prop.destroyed = true;
-		const attacker = this.players.get(projectile.metadata.ownerPlayerId);
 		if (attacker) {
-			const score = propScore(prop.type);
-			attacker.stats.score += score;
-			attacker.stats.propsDestroyed += 1;
-			this.emitScore(attacker);
 			this.bridge.emit({
 				type: "prop-destroyed",
 				playerId: attacker.assignment.playerId,
 				propType: prop.type,
-				score,
+				score: scoreBreakdown.totalScore,
 			});
 			if (isUuid(attacker.assignment.playerId))
 				this.emitSpectatorPresentation({
@@ -1103,23 +1207,21 @@ export class ArenaScene extends Phaser.Scene {
 					playerId: attacker.assignment.playerId,
 					propId,
 					propType: prop.type,
-					score,
+					score: scoreBreakdown.totalScore,
 					impactX: prop.body.x,
 					impactY: prop.body.y,
 				});
-			this.effects?.score(
-				prop.body.x,
-				prop.body.y - 36,
-				score,
-				PLAYER_HEX[attacker.assignment.color],
-			);
 		}
 		this.audio.play(`${prop.type}-break`);
 		this.effects?.destroyProp(prop.type, prop.body.x, prop.body.y);
-		prop.body
-			.setTexture(`${definition.textureKey}-broken`)
-			.clearTint()
-			.setCollidesWith(0);
+		prop.body.setTint(0x626b78).setCollidesWith(0);
+		this.tweens.add({
+			targets: prop.shadow,
+			alpha: 0.08,
+			scaleX: 1.18,
+			duration: 260,
+			ease: "Quint.Out",
+		});
 		this.tweens.add({
 			targets: prop.body,
 			scaleX: 1.18,
@@ -1157,6 +1259,7 @@ export class ArenaScene extends Phaser.Scene {
 			this.destroyProjectile(projectileId);
 		for (const prop of this.props.values()) {
 			prop.body.destroy();
+			prop.shadow.destroy();
 		}
 		this.props.clear();
 		this.buildProps();
@@ -1187,17 +1290,12 @@ export class ArenaScene extends Phaser.Scene {
 		if (this.phase !== "playing") return;
 		this.audio.stopSoundtrack();
 		this.phase = "results";
-		const standings = Array.from(this.players.values())
-			.sort(
-				(a, b) =>
-					b.stats.score - a.stats.score ||
-					a.assignment.playerNumber - b.assignment.playerNumber,
-			)
-			.map((player, index) => ({
+		const standings = rankStandings(
+			Array.from(this.players.values(), (player) => ({
 				...player.assignment,
 				...player.stats,
-				rank: index + 1,
-			}));
+			})),
+		);
 		this.finalStandings = standings;
 		this.bridge.emit({ type: "phase-changed", phase: this.phase });
 		this.bridge.emit({ type: "timer-changed", timeRemainingMs: 0 });
@@ -1212,21 +1310,24 @@ export class ArenaScene extends Phaser.Scene {
 		});
 		this.audio.play("round-end");
 		this.time.delayedCall(180, () => this.audio.play("winner"));
-		const winner = this.players.get(standings[0]?.playerId ?? "");
-		if (winner && !this.reducedMotion) {
-			this.tweens.add({
-				targets: winner.sprite,
-				y: winner.sprite.y - 32,
-				angle: 8,
-				scale: 1.18,
-				duration: 300,
-				yoyo: true,
-				repeat: 3,
-			});
-		}
+		const winnerIds = new Set(
+			standings
+				.filter((standing) => standing.rank === 1)
+				.map((standing) => standing.playerId),
+		);
 		if (!this.reducedMotion)
 			for (const player of this.players.values())
-				if (player !== winner)
+				if (winnerIds.has(player.assignment.playerId))
+					this.tweens.add({
+						targets: player.sprite,
+						y: player.sprite.y - 32,
+						angle: 8,
+						scale: 1.18,
+						duration: 300,
+						yoyo: true,
+						repeat: 3,
+					});
+				else
 					this.tweens.add({
 						targets: player.sprite,
 						angle: player.assignment.playerNumber % 2 ? -5 : 5,
@@ -1402,7 +1503,8 @@ export class ArenaScene extends Phaser.Scene {
 		if (
 			this.phase === "countdown" &&
 			snapshot.countdownValue !== undefined &&
-			countdownRank(snapshot.countdownValue) > countdownRank(this.countdownValue)
+			countdownRank(snapshot.countdownValue) >
+				countdownRank(this.countdownValue)
 		)
 			this.showCountdown(
 				snapshot.countdownValue === "FLICK"
@@ -1460,13 +1562,21 @@ export class ArenaScene extends Phaser.Scene {
 			prop.body
 				.setPosition(state.x, state.y)
 				.setRotation(state.rotation)
-				.setTexture(
+				.setTexture(PROP_DEFINITIONS[state.propType].textureKey)
+				.setTint(
 					state.destroyed
-						? `${PROP_DEFINITIONS[state.propType].textureKey}-broken`
+						? 0x626b78
 						: state.damageState > 0
-							? `${PROP_DEFINITIONS[state.propType].textureKey}-damaged`
-							: PROP_DEFINITIONS[state.propType].textureKey,
+							? 0xf0d4c0
+							: 0xffffff,
 				)
+				.setVisible(true);
+			prop.shadow
+				.setPosition(
+					state.x,
+					state.y + PROP_DEFINITIONS[state.propType].renderHeight * 0.46,
+				)
+				.setAlpha(state.destroyed ? 0.08 : 0.25)
 				.setVisible(true);
 		}
 	}
@@ -1484,6 +1594,8 @@ export class ArenaScene extends Phaser.Scene {
 			})
 			.setDepth(5)
 			.setRotation(state.rotation);
+		if (definition.renderWidth && definition.renderHeight)
+			body.setDisplaySize(definition.renderWidth, definition.renderHeight);
 		this.projectiles.set(state.projectileId, {
 			body,
 			metadata: {
@@ -1493,8 +1605,11 @@ export class ArenaScene extends Phaser.Scene {
 				practice: false,
 				createdAt: this.time.now,
 				scoredPlayerIds: new Set(),
-				destroyedPropIds: new Set(),
+				scoredPropIds: new Set(),
 				lastWorldImpactAt: 0,
+				worldBounceCount: 0,
+				detonated: false,
+				creditedSuccessfulThrow: false,
 			},
 		});
 	}
@@ -1524,6 +1639,7 @@ export class ArenaScene extends Phaser.Scene {
 					event.impactY - 42,
 					event.score,
 					ARCADE_COLORS.white,
+					hitBonusLabels(event).join(" • ") || undefined,
 				);
 				if (target) {
 					target.sprite.setTint(0xffffff);
@@ -1540,16 +1656,26 @@ export class ArenaScene extends Phaser.Scene {
 					7,
 					0xffb070,
 				);
+				{
+					const attacker = this.players.get(event.playerId);
+					this.effects?.score(
+						event.impactX,
+						event.impactY - 36,
+						event.score,
+						attacker
+							? PLAYER_HEX[attacker.assignment.color]
+							: ARCADE_COLORS.white,
+						event.destroyed ? "SMASH" : "PROP HIT",
+					);
+				}
+				break;
+			case "bomb-exploded":
+				this.audio.play("heavy-impact");
+				this.effects?.explosion(event.impactX, event.impactY);
 				break;
 			case "prop-destroyed":
 				this.audio.play(`${event.propType}-break`);
 				this.effects?.destroyProp(event.propType, event.impactX, event.impactY);
-				this.effects?.score(
-					event.impactX,
-					event.impactY - 36,
-					event.score,
-					ARCADE_COLORS.white,
-				);
 				break;
 			case "countdown":
 				this.showCountdown(
@@ -1576,13 +1702,24 @@ export class ArenaScene extends Phaser.Scene {
 }
 
 function emptyStats(): PlayerRoundStats {
-	return { score: 0, throws: 0, playerHits: 0, propsDestroyed: 0 };
+	return {
+		score: 0,
+		throws: 0,
+		playerHits: 0,
+		successfulThrows: 0,
+		bankShots: 0,
+		leaderHits: 0,
+		propHits: 0,
+		propsDestroyed: 0,
+	};
 }
 
 function projectileName(type: ProjectileType) {
 	if (type === "paper-ball") return "PAPER";
 	if (type === "coffee-mug") return "MUG";
-	return "STAPLER";
+	if (type === "stapler") return "STAPLER";
+	if (type === "bomb") return "DESK BOMB";
+	return "SUPERBALL";
 }
 
 function isUuid(value: string) {

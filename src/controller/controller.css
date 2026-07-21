@@ -580,6 +580,23 @@
 	box-shadow: 0 -8px 0 -2px #2f3a50;
 }
 
+.projectile-bomb,
+.projectile-superball {
+	width: 32px;
+	height: 32px;
+	background-position: center;
+	background-repeat: no-repeat;
+	background-size: contain;
+}
+
+.projectile-bomb {
+	background-image: url("/assets/game/projectile-bomb.png");
+}
+
+.projectile-superball {
+	background-image: url("/assets/game/projectile-superball.png");
+}
+
 .controller-aim-surface {
 	min-height: 142px;
 	border: 4px solid var(--ink);
@@ -760,4 +777,532 @@
 	.controller-aim-surface {
 		min-height: 140px;
 	}
+}
+
+/* Game-first controller HUD */
+.controller-shell {
+	--controller-bezel: #172033;
+	--controller-screen: #f8fbff;
+	background: color-mix(in srgb, var(--player-color), #dff6ff 72%);
+}
+
+.controller-shell .controller-card {
+	width: min(100%, 460px);
+	padding: 18px;
+	background: #fffaf0;
+}
+
+.controller-shell .controller-header {
+	min-height: 34px;
+}
+
+.controller-shell .controller-player-header {
+	margin-top: 14px;
+	padding: 13px;
+	border: 3px solid var(--controller-bezel);
+	border-radius: 12px;
+	background: color-mix(in srgb, var(--player-color), white 30%);
+	box-shadow: 0 5px 0 var(--controller-bezel);
+}
+
+.controller-shell .controller-player-header h1,
+.controller-shell .controller-player-header p,
+.controller-shell .controller-player-header p strong,
+.controller-shell .controller-score-block span,
+.controller-shell .controller-score-block strong {
+	color: var(--controller-bezel);
+}
+
+.controller-shell .controller-player-header .panel-label {
+	color: color-mix(in srgb, var(--controller-bezel), transparent 22%);
+}
+
+.controller-shell .controller-avatar {
+	border-color: var(--controller-bezel);
+	background: #fffaf0;
+}
+
+.controller-shell .controller-score-block {
+	min-width: 78px;
+	padding: 7px 9px;
+	border: 2px solid var(--controller-bezel);
+	border-radius: 8px;
+	background: #fffaf0;
+}
+
+.controller-score-block span {
+	font-size: 10px;
+	font-weight: 900;
+}
+
+.controller-score-block strong {
+	font-size: 27px;
+	line-height: 1;
+}
+
+.controller-shell .controller-match-bar {
+	margin: 12px 0 9px;
+	border: 0;
+	border-radius: 8px;
+	color: white;
+	background: var(--controller-bezel);
+}
+
+.controller-match-bar span,
+.controller-match-bar strong {
+	color: white;
+}
+
+.controller-match-bar strong {
+	padding: 2px 7px;
+	border-radius: 5px;
+	color: var(--controller-bezel);
+	background: var(--gold);
+}
+
+.controller-projectile {
+	margin-bottom: 9px;
+}
+
+.controller-projectile .projectile-readout {
+	min-height: 54px;
+	border-width: 3px;
+	border-color: var(--controller-bezel);
+	background: var(--controller-screen);
+}
+
+.controller-projectile .projectile-readout:first-child {
+	background: color-mix(in srgb, var(--player-color), white 74%);
+}
+
+.controller-shell .projectile-readout .panel-label {
+	color: #526178;
+	font-size: 10px;
+	font-weight: 900;
+}
+
+.controller-aim-surface {
+	--aim-track-y: 72%;
+	min-height: 160px;
+	margin: 0 0 10px;
+	border-color: var(--controller-bezel);
+	background:
+		radial-gradient(
+			circle at 50% 72%,
+			transparent 0 23px,
+			rgba(255, 255, 255, 0.18) 24px 26px,
+			transparent 27px 43px,
+			rgba(255, 255, 255, 0.1) 44px 46px,
+			transparent 47px
+		),
+		var(--controller-bezel);
+	box-shadow: inset 0 -7px 0 rgba(0, 0, 0, 0.2);
+}
+
+.controller-aim-surface.is-dragging {
+	border-color: var(--controller-bezel);
+	box-shadow:
+		inset 0 -7px 0 rgba(0, 0, 0, 0.2),
+		0 0 0 4px color-mix(in srgb, var(--player-color), transparent 30%);
+}
+
+.aim-surface-label {
+	top: 17px;
+	color: white;
+}
+
+.aim-surface-label strong {
+	font-family: var(--sans);
+	font-size: 13px;
+	font-weight: 950;
+	letter-spacing: 0.16em;
+}
+
+.aim-surface-label small {
+	color: var(--gold);
+	font-size: 25px;
+	line-height: 1;
+}
+
+.aim-surface-track {
+	left: 12%;
+	right: 12%;
+	height: 7px;
+	border: 2px solid white;
+	background: color-mix(in srgb, var(--player-color), white 15%);
+}
+
+.aim-surface-handle {
+	top: calc(var(--aim-track-y) - 17px);
+	width: 34px;
+	height: 34px;
+	border-color: white;
+	background: var(--gold);
+	box-shadow: 0 4px 0 rgba(0, 0, 0, 0.28);
+}
+
+.aim-surface-handle span {
+	width: 10px;
+	height: 10px;
+	background: var(--controller-bezel);
+}
+
+.aim-surface-limit {
+	top: calc(var(--aim-track-y) + 18px);
+	color: rgba(255, 255, 255, 0.72);
+	font-size: 10px;
+	font-weight: 900;
+	letter-spacing: 0.12em;
+}
+
+.aim-surface-left {
+	left: 11%;
+}
+
+.aim-surface-right {
+	right: 11%;
+}
+
+.controller-throw-instruction {
+	gap: 3px;
+}
+
+.controller-throw-instruction strong {
+	color: var(--controller-bezel);
+	font-family: var(--sans);
+	font-size: 13px;
+	font-weight: 950;
+	letter-spacing: 0.1em;
+}
+
+.controller-throw-instruction span,
+.controller-safety-note {
+	font-family: var(--sans);
+	font-size: 11px;
+}
+
+.controller-safety-note {
+	margin-top: 3px;
+}
+
+.controller-throw {
+	margin-top: 10px;
+}
+
+.throw-button {
+	min-height: 94px;
+	border-color: var(--controller-bezel);
+	background: var(--gold);
+	box-shadow: 0 7px 0 #a56e00;
+}
+
+.throw-button:hover:not(:disabled) {
+	background: #ffd95a;
+}
+
+.throw-button:focus-visible,
+.action-button:focus-visible,
+.sensitivity-button:focus-visible,
+.controller-setup summary:focus-visible {
+	outline: 3px solid white;
+	outline-offset: 2px;
+	box-shadow: 0 0 0 5px var(--controller-bezel);
+}
+
+.throw-button strong {
+	font-size: 31px;
+	letter-spacing: 0.08em;
+}
+
+.throw-button small {
+	font-family: var(--sans);
+	font-size: 10px;
+	font-weight: 800;
+	letter-spacing: 0;
+}
+
+.controller-ready-panel {
+	display: grid;
+	gap: 11px;
+	margin-top: 15px;
+	padding: 13px;
+	border: 3px solid var(--controller-bezel);
+	border-radius: 11px;
+	background: #e6f8ea;
+}
+
+.controller-ready-panel > div {
+	display: grid;
+	gap: 3px;
+}
+
+.controller-ready-panel > div strong {
+	color: #0d5e2a;
+	font-size: 16px;
+	font-weight: 950;
+}
+
+.controller-ready-panel > div span {
+	color: #314d3a;
+	font-size: 11px;
+	line-height: 1.4;
+}
+
+.controller-ready-panel .action-button {
+	min-height: 54px;
+	border: 3px solid var(--controller-bezel);
+	border-radius: 8px;
+	font-size: 15px;
+	font-weight: 950;
+}
+
+.controller-ready-panel .action-accent {
+	background: var(--mint);
+	box-shadow: 0 5px 0 #178c45;
+}
+
+.controller-ready-panel .action-ready {
+	background: var(--gold);
+	box-shadow: 0 5px 0 #a56e00;
+}
+
+.controller-setup {
+	margin-top: 12px;
+	border: 2px solid #99a5b6;
+	border-radius: 10px;
+	background: #edf1f6;
+}
+
+.controller-setup summary {
+	display: flex;
+	min-height: 58px;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 10px 12px;
+	border-radius: 8px;
+	cursor: pointer;
+	list-style: none;
+	-webkit-tap-highlight-color: transparent;
+}
+
+.controller-setup summary::-webkit-details-marker {
+	display: none;
+}
+
+.controller-setup summary > span:first-child {
+	display: grid;
+	gap: 2px;
+}
+
+.controller-setup summary strong {
+	color: var(--controller-bezel);
+	font-size: 13px;
+	font-weight: 900;
+}
+
+.controller-setup summary small {
+	color: #526178;
+	font-size: 10px;
+	text-transform: capitalize;
+}
+
+.setup-disclosure {
+	display: grid;
+	flex: 0 0 auto;
+	width: 30px;
+	height: 30px;
+	place-items: center;
+	border: 2px solid var(--controller-bezel);
+	border-radius: 50%;
+	color: var(--controller-bezel);
+	background: white;
+	font-size: 20px;
+	font-weight: 900;
+	line-height: 1;
+	transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.controller-setup[open] .setup-disclosure {
+	transform: rotate(45deg);
+}
+
+.controller-setup-body {
+	display: grid;
+	gap: 10px;
+	padding: 13px;
+	border-top: 1px solid #b8c1cd;
+}
+
+.controller-setup-body .action-primary {
+	min-height: 48px;
+	border: 2px solid var(--controller-bezel);
+	border-radius: 8px;
+	background: color-mix(in srgb, var(--player-color), white 58%);
+	font-weight: 900;
+}
+
+.controller-setup-explainer {
+	margin: -3px 2px 0;
+	color: #4a5870;
+	font-size: 11px;
+	line-height: 1.4;
+}
+
+.controller-setup .sensitivity-control {
+	margin: 0;
+	border-width: 2px;
+}
+
+.controller-setup .motion-monitor {
+	margin: 0;
+}
+
+.controller-setup .screen-wake-status {
+	margin: 0;
+}
+
+.controller-footnote {
+	margin-bottom: 0;
+}
+
+.phase-playing .controller-player-header {
+	margin-top: 8px;
+	padding-top: 10px;
+	padding-bottom: 10px;
+}
+
+.phase-playing .controller-ready-panel {
+	display: none;
+}
+
+@media (max-width: 560px) {
+	.controller-shell .controller-card {
+		padding: max(12px, env(safe-area-inset-top))
+			max(13px, env(safe-area-inset-right))
+			max(16px, env(safe-area-inset-bottom))
+			max(13px, env(safe-area-inset-left));
+	}
+
+	.controller-shell .controller-player-header {
+		grid-template-columns: 50px minmax(0, 1fr) auto;
+		margin-top: 10px;
+		padding: 11px;
+	}
+
+	.controller-shell .controller-avatar {
+		width: 50px;
+		height: 50px;
+		font-size: 16px;
+	}
+
+	.controller-shell .controller-player-header h1 {
+		font-size: 20px;
+	}
+
+	.controller-shell .controller-score-block {
+		min-width: 69px;
+		padding: 6px 7px;
+	}
+
+	.controller-score-block strong {
+		font-size: 23px;
+	}
+
+	.controller-aim-surface {
+		min-height: 152px;
+	}
+
+	.throw-button {
+		min-height: 88px;
+	}
+
+	.controller-ready-panel {
+		margin-top: 13px;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.setup-disclosure {
+		transition: none;
+	}
+}
+
+/* Compact post-round recap */
+.controller-result {
+	display: grid;
+	gap: 8px;
+	margin-top: 16px;
+}
+
+.controller-result .controller-rank {
+	margin-top: 0;
+}
+
+.controller-result-stats {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 6px;
+}
+
+.controller-result-stats > span {
+	display: grid;
+	gap: 2px;
+	padding: 8px 4px;
+	border: 2px solid var(--ink);
+	border-radius: 8px;
+	color: #56647a;
+	background: var(--surface-raised);
+	font-size: 10px;
+	font-weight: 850;
+	text-align: center;
+}
+
+.controller-result-stats strong {
+	color: var(--ink);
+	font-size: 16px;
+}
+
+.controller-award {
+	display: grid;
+	gap: 2px;
+	padding: 10px 12px;
+	border: 3px solid var(--ink);
+	border-radius: 10px;
+	color: var(--ink);
+	background: color-mix(in srgb, var(--player-color), white 68%);
+	box-shadow: 3px 3px 0 var(--ink);
+	text-align: center;
+}
+
+.controller-award span,
+.controller-award small {
+	font-size: 10px;
+	font-weight: 850;
+	letter-spacing: 0.08em;
+}
+
+.controller-award strong {
+	font-size: 16px;
+	font-weight: 950;
+}
+
+.controller-rematch-prompt {
+	margin: 0;
+	color: #56647a;
+	font-size: 11px;
+	font-weight: 750;
+	text-align: center;
+}
+
+.phase-results .controller-projectile,
+.phase-results .controller-aim-surface,
+.phase-results .controller-throw-instruction,
+.phase-results .controller-safety-note,
+.phase-results .controller-throw,
+.phase-results .controller-setup,
+.phase-results .debug-toggle,
+.phase-results .debug-panel,
+.phase-results .controller-footnote {
+	display: none;
 }

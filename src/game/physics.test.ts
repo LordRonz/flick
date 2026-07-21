@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { GAME_HEIGHT, GAME_WIDTH, WORLD_BOUNDARIES } from "./config/arena";
 import { PROJECTILE_DEFINITIONS } from "./config/projectiles";
+import { PROP_DEFINITIONS } from "./config/props";
 import { launchVelocity, mapAimAngle, mapThrowSpeed } from "./systems/aim";
 
 describe("game physics boundary", () => {
@@ -34,5 +35,22 @@ describe("game physics boundary", () => {
 			PROJECTILE_DEFINITIONS.stapler.restitution,
 		);
 		expect(PROJECTILE_DEFINITIONS.stapler.restitution).toBeGreaterThan(0);
+		expect(PROJECTILE_DEFINITIONS.superball.restitution).toBeGreaterThan(
+			PROJECTILE_DEFINITIONS["paper-ball"].restitution,
+		);
+		expect(PROJECTILE_DEFINITIONS.superball.maxWorldBounces).toBe(8);
+		expect(PROJECTILE_DEFINITIONS.bomb.fuseMs).toBeGreaterThan(0);
+	});
+
+	it("gives the floor obstacles distinct, finite motion", () => {
+		const chair = PROP_DEFINITIONS["office-chair"];
+		const bin = PROP_DEFINITIONS["recycling-bin"];
+
+		expect(chair.isStatic).toBe(false);
+		expect(bin.isStatic).toBe(false);
+		expect(chair.mass).toBeGreaterThan(bin.mass ?? 0);
+		expect(bin.restitution).toBeGreaterThan(chair.restitution ?? 0);
+		expect(chair.frictionAir).toBeGreaterThan(0);
+		expect(bin.frictionAir).toBeGreaterThan(0);
 	});
 });

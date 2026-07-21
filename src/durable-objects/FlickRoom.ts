@@ -417,7 +417,8 @@ export class FlickRoom extends DurableObject {
 		if (
 			message.type === "flick-accepted" ||
 			message.type === "score-update" ||
-			message.type === "prop-destroyed"
+			message.type === "prop-destroyed" ||
+			message.type === "prop-hit-confirmed"
 		)
 			targetPlayerIds.add(message.playerId);
 		if (message.type === "hit-confirmed")

@@ -7,6 +7,7 @@ export type ArcadeSoundCue =
 	| "medium-impact"
 	| "monitor-break"
 	| "mug-throw"
+	| "office-chair-break"
 	| "paper-throw"
 	| "plant-break"
 	| "platform-impact"
@@ -14,6 +15,7 @@ export type ArcadeSoundCue =
 	| "player-join"
 	| "player-ready"
 	| "printer-break"
+	| "recycling-bin-break"
 	| "round-end"
 	| "round-start"
 	| "stapler-throw"
@@ -60,7 +62,9 @@ const SFX_PATHS: Record<ArcadeSoundCue, string> = {
 	"player-hit": "/assets/audio/impacts/player-hit.wav",
 	"platform-impact": "/assets/audio/impacts/platform.wav",
 	"monitor-break": "/assets/audio/destruction/monitor.wav",
+	"office-chair-break": "/assets/audio/destruction/printer.wav",
 	"printer-break": "/assets/audio/destruction/printer.wav",
+	"recycling-bin-break": "/assets/audio/destruction/paper-stack.wav",
 	"plant-break": "/assets/audio/destruction/plant.wav",
 	"water-cooler-break": "/assets/audio/destruction/water-cooler.wav",
 	"document-stack-break": "/assets/audio/destruction/paper-stack.wav",

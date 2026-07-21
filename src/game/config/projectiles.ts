@@ -5,6 +5,8 @@ export type ProjectileDefinition = {
 	bodyShape: "circle" | "rectangle";
 	width: number;
 	height: number;
+	renderWidth?: number;
+	renderHeight?: number;
 	radius?: number;
 	mass: number;
 	restitution: number;
@@ -15,6 +17,8 @@ export type ProjectileDefinition = {
 	propDamage: number;
 	lifetimeMs: number;
 	angularVelocityRange: { min: number; max: number };
+	fuseMs?: number;
+	maxWorldBounces?: number;
 };
 
 export const MIN_THROW_SPEED = 12;
@@ -71,12 +75,52 @@ export const PROJECTILE_DEFINITIONS: Record<
 		lifetimeMs: 6500,
 		angularVelocityRange: { min: -5, max: 5 },
 	},
+	bomb: {
+		textureKey: "projectile-bomb",
+		bodyShape: "circle",
+		width: 34,
+		height: 34,
+		renderWidth: 54,
+		renderHeight: 54,
+		radius: 17,
+		mass: 1.8,
+		restitution: 0.58,
+		friction: 0.2,
+		frictionAir: 0.014,
+		speedMultiplier: 0.86,
+		hitScore: 125,
+		propDamage: 3,
+		lifetimeMs: 2200,
+		fuseMs: 1100,
+		angularVelocityRange: { min: -6, max: 6 },
+	},
+	superball: {
+		textureKey: "projectile-superball",
+		bodyShape: "circle",
+		width: 28,
+		height: 28,
+		renderWidth: 42,
+		renderHeight: 42,
+		radius: 14,
+		mass: 0.95,
+		restitution: 0.98,
+		friction: 0.015,
+		frictionAir: 0.004,
+		speedMultiplier: 1.3,
+		hitScore: 75,
+		propDamage: 1,
+		lifetimeMs: 5200,
+		maxWorldBounces: 8,
+		angularVelocityRange: { min: -11, max: 11 },
+	},
 };
 
 export const PROJECTILE_SEQUENCE: ProjectileType[] = [
 	"paper-ball",
 	"coffee-mug",
 	"stapler",
+	"bomb",
+	"superball",
 ];
 
 export function nextProjectileType(

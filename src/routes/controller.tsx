@@ -35,9 +35,12 @@ import { type FlickSource, THROW_COOLDOWN_MS } from "../game/config/controls";
 import { nextProjectileType } from "../game/config/projectiles";
 import { mapAimAngle } from "../game/systems/aim";
 import { clamp } from "../game/systems/math";
+import { buildRoundAwards, successfulThrowRate } from "../game/systems/results";
+import { hitBonusLabels } from "../game/systems/scoring";
 import type {
 	LobbyPlayer,
 	MatchPhase,
+	MatchStanding,
 	PlayerAssignment,
 	ProjectileType,
 } from "../game/types";
@@ -94,7 +97,7 @@ function ControllerPage() {
 	const [phase, setPhase] = useState<MatchPhase>("lobby");
 	const [timeRemainingMs, setTimeRemainingMs] = useState(0);
 	const [score, setScore] = useState(0);
-	const [rank, setRank] = useState<number | null>(null);
+	const [roundStandings, setRoundStandings] = useState<MatchStanding[]>([]);
 	const [aim, setAim] = useState(0);
 	const [isAiming, setIsAiming] = useState(false);
 	const [magnitude, setMagnitude] = useState(0);
@@ -111,6 +114,11 @@ function ControllerPage() {
 	const [cooldownEndsAt, setCooldownEndsAt] = useState(0);
 	const [confirmation, setConfirmation] = useState("");
 	const [ready, setReady] = useState(false);
+	const [leaderState, setLeaderState] = useState<{
+		playerId: string | null;
+		playerNumber: PlayerAssignment["playerNumber"] | null;
+		bountyActive: boolean;
+	}>({ playerId: null, playerNumber: null, bountyActive: false });
 	const [sensitivity, setSensitivity] = useState<FlickSensitivity>("normal");
 	const [debugOpen, setDebugOpen] = useState(false);
 	const [error, setError] = useState("");
@@ -261,6 +269,15 @@ function ControllerPage() {
 				phaseRef.current = message.phase;
 				setPhase(message.phase);
 				setTimeRemainingMs(message.timeRemainingMs ?? 0);
+				if (message.phase !== "results") {
+					setRoundStandings([]);
+				}
+			} else if (message.type === "leader-state") {
+				setLeaderState({
+					playerId: message.leaderPlayerId,
+					playerNumber: message.leaderPlayerNumber,
+					bountyActive: message.bountyActive,
+				});
 			} else if (
 				message.type === "flick-accepted" &&
 				message.playerId === assignmentRef.current?.playerId
@@ -290,8 +307,21 @@ function ControllerPage() {
 				message.type === "hit-confirmed" &&
 				message.attackerPlayerId === assignmentRef.current?.playerId
 			) {
-				showConfirmation(`+${message.score} HIT`);
+				const bonuses = hitBonusLabels(message);
+				showConfirmation(
+					bonuses.length
+						? `${bonuses.join(" · ")} · TOTAL +${message.score}`
+						: `HIT +${message.score}`,
+				);
 				vibrate(90);
+			} else if (
+				message.type === "prop-hit-confirmed" &&
+				message.playerId === assignmentRef.current?.playerId
+			) {
+				showConfirmation(
+					`${message.destroyed ? "SMASH" : "PROP HIT"} +${message.score}`,
+				);
+				vibrate(message.destroyed ? 110 : 55);
 			} else if (
 				message.type === "player-hit" &&
 				message.targetPlayerId === assignmentRef.current?.playerId
@@ -299,10 +329,7 @@ function ControllerPage() {
 				showConfirmation("YOU GOT BONKED");
 				vibrate(80, 80);
 			} else if (message.type === "round-result") {
-				const standing = message.standings.find(
-					(candidate) => candidate.playerId === assignmentRef.current?.playerId,
-				);
-				setRank(standing?.rank ?? null);
+				setRoundStandings(message.standings);
 				setPhase("results");
 				phaseRef.current = "results";
 				vibrate(240);
@@ -605,6 +632,16 @@ function ControllerPage() {
 		Boolean(assignment) && cooldownMs === 0 && phase === "playing";
 	const motionSignal = Math.min(1, magnitude / 24);
 	const wakeLockCopy = screenWakeLockCopy(wakeLockStatus);
+	const personalAward = buildRoundAwards(roundStandings).find(
+		(award) => award.playerId === assignment?.playerId,
+	);
+	const resultStanding = roundStandings.find(
+		(standing) => standing.playerId === assignment?.playerId,
+	);
+	const leaderCopy =
+		phase === "playing" && leaderState.playerNumber
+			? `${leaderState.playerId === assignment?.playerId ? "YOU" : `P${leaderState.playerNumber}`} · ${leaderState.bountyActive ? "TARGET +25" : "LEADER"}`
+			: phase.toUpperCase();
 
 	return (
 		<main className={`controller-shell color-${color} phase-${phase}`}>
@@ -621,7 +658,10 @@ function ControllerPage() {
 					</span>
 				</header>
 
-				<section className="controller-player-header">
+				<section
+					className="controller-player-header"
+					aria-label="Player status"
+				>
 					<div className="controller-avatar">
 						<span>{assignment ? `P${assignment.playerNumber}` : "—"}</span>
 					</div>
@@ -635,13 +675,13 @@ function ControllerPage() {
 						</p>
 					</div>
 					<div className="controller-score-block">
-						<span>SCORE</span>
+						<span>YOUR SCORE</span>
 						<strong>{score.toString().padStart(3, "0")}</strong>
 					</div>
 				</section>
 
-				<div className="controller-match-bar">
-					<span>{phase.toUpperCase()}</span>
+				<output className="controller-match-bar" aria-label="Match status">
+					<span>{leaderCopy}</span>
 					<strong>
 						{phase === "playing"
 							? `${seconds}s`
@@ -653,7 +693,7 @@ function ControllerPage() {
 										? "YOU’RE READY"
 										: "NOT READY"}
 					</strong>
-				</div>
+				</output>
 
 				{error ? (
 					<div className="controller-error" role="alert">
@@ -661,9 +701,9 @@ function ControllerPage() {
 					</div>
 				) : null}
 
-				<section className="controller-projectile">
-					<ProjectileReadout label="CURRENT" type={projectile} />
-					<ProjectileReadout label="NEXT" type={nextProjectile} />
+				<section className="controller-projectile" aria-label="Your loadout">
+					<ProjectileReadout label="LOADED" type={projectile} />
+					<ProjectileReadout label="UP NEXT" type={nextProjectile} />
 				</section>
 
 				<div
@@ -682,11 +722,11 @@ function ControllerPage() {
 					onPointerCancel={handlePointerCancel}
 				>
 					<span className="aim-surface-label">
-						<strong>DRAG TO AIM</strong>
+						<strong>AIM</strong>
 						<small>{aimDegrees}°</small>
 					</span>
-					<span className="aim-surface-limit aim-surface-left">←</span>
-					<span className="aim-surface-limit aim-surface-right">→</span>
+					<span className="aim-surface-limit aim-surface-left">LEFT</span>
+					<span className="aim-surface-limit aim-surface-right">RIGHT</span>
 					<span className="aim-surface-track" />
 					<span
 						className="aim-surface-handle"
@@ -697,41 +737,17 @@ function ControllerPage() {
 				</div>
 
 				<p className="controller-throw-instruction">
-					<strong>FLICK TO THROW</strong>
-					<span>Hold the phone securely and make a short forward motion.</span>
+					<strong>DRAG · FLICK · SCORE</strong>
+					<span>
+						Drag to aim, then make a short forward flick. Hold your phone
+						securely.
+					</span>
 				</p>
 				{phase === "lobby" ? (
 					<p className="controller-safety-note">
-						Keep a firm grip and leave space around you.
+						Leave space around you—or use the big Throw button instead.
 					</p>
 				) : null}
-
-				<fieldset
-					className="sensitivity-control"
-					aria-describedby="flick-sensitivity-help"
-				>
-					<legend>FLICK SENSITIVITY</legend>
-					<p id="flick-sensitivity-help">
-						Choose High if lighter phone motions are not registering.
-					</p>
-					<div>
-						{(["low", "normal", "high"] as FlickSensitivity[]).map((option) => (
-							<button
-								key={option}
-								type="button"
-								className={
-									option === sensitivity
-										? "sensitivity-button is-selected"
-										: "sensitivity-button"
-								}
-								aria-pressed={option === sensitivity}
-								onClick={() => updateFlickSensitivity(option)}
-							>
-								{option.toUpperCase()}
-							</button>
-						))}
-					</div>
-				</fieldset>
 
 				<section className="controller-throw">
 					<button
@@ -745,12 +761,12 @@ function ControllerPage() {
 							className="throw-button-progress"
 							style={{ width: `${throwProgress * 100}%` }}
 						/>
-						<strong>THROW</strong>
+						<strong>{cooldownMs > 0 ? "RELOADING…" : "THROW!"}</strong>
 						<small>
 							{cooldownMs > 0
 								? `${(cooldownMs / 1000).toFixed(1)}s cooldown`
 								: canThrow
-									? "Tap if motion is unavailable"
+									? "Tap to launch your loaded ammo"
 									: phase === "lobby"
 										? "Waiting for the host to start"
 										: "Throw unavailable"}
@@ -766,7 +782,40 @@ function ControllerPage() {
 				</div>
 
 				{phase === "lobby" ? (
-					<div className="controller-actions">
+					<section className="controller-ready-panel">
+						<div>
+							<strong>{ready ? "LOCKED IN!" : "READY TO RUMBLE?"}</strong>
+							<span>
+								{ready
+									? "Watch the big screen. The host can start anytime."
+									: "Your aim and Throw button already work. Motion mode is optional."}
+							</span>
+						</div>
+						<button
+							className={`action-button ${ready ? "action-ready" : "action-accent"}`}
+							type="button"
+							onClick={toggleReady}
+							disabled={!assignment}
+						>
+							{ready ? "✓ READY — TAP TO CANCEL" : "I’M READY!"}
+						</button>
+					</section>
+				) : null}
+
+				<details className="controller-setup">
+					<summary>
+						<span>
+							<strong>Controller setup</strong>
+							<small>
+								Motion {permission === "Enabled" ? "on" : "optional"} ·{" "}
+								{sensitivity} sensitivity
+							</small>
+						</span>
+						<span className="setup-disclosure" aria-hidden="true">
+							+
+						</span>
+					</summary>
+					<div className="controller-setup-body">
 						<button
 							className="action-button action-primary"
 							type="button"
@@ -777,6 +826,38 @@ function ControllerPage() {
 								? "Physical Flick Enabled"
 								: "Enable Physical Flick"}
 						</button>
+						<p className="controller-setup-explainer">
+							Physical flick is optional. The on-screen Throw button always
+							remains available.
+						</p>
+						<fieldset
+							className="sensitivity-control"
+							aria-describedby="flick-sensitivity-help"
+						>
+							<legend>FLICK SENSITIVITY</legend>
+							<p id="flick-sensitivity-help">
+								Choose High if lighter phone motions are not registering.
+							</p>
+							<div>
+								{(["low", "normal", "high"] as FlickSensitivity[]).map(
+									(option) => (
+										<button
+											key={option}
+											type="button"
+											className={
+												option === sensitivity
+													? "sensitivity-button is-selected"
+													: "sensitivity-button"
+											}
+											aria-pressed={option === sensitivity}
+											onClick={() => updateFlickSensitivity(option)}
+										>
+											{option.toUpperCase()}
+										</button>
+									),
+								)}
+							</div>
+						</fieldset>
 						<output
 							className={`motion-monitor ${permission === "Enabled" ? "is-enabled" : ""} ${motionEventCount > 0 ? "is-live" : ""}`}
 							aria-label={
@@ -828,16 +909,8 @@ function ControllerPage() {
 								<p>{wakeLockCopy.detail}</p>
 							</div>
 						</output>
-						<button
-							className={`action-button ${ready ? "action-ready" : "action-accent"}`}
-							type="button"
-							onClick={toggleReady}
-							disabled={!assignment}
-						>
-							{ready ? "Ready — tap to leave ready state" : "Mark Me Ready"}
-						</button>
 					</div>
-				) : null}
+				</details>
 
 				<button
 					className="debug-toggle"
@@ -902,10 +975,38 @@ function ControllerPage() {
 						? "Drag to aim. Flick to throw. Tap THROW if motion is unavailable."
 						: "Waiting for the host to reconnect."}
 				</p>
-				{phase === "results" && rank ? (
-					<div className="controller-rank">
-						FINAL RANK <strong>#{rank}</strong>
-					</div>
+				{phase === "results" && resultStanding ? (
+					<section className="controller-result" aria-label="Your round result">
+						<div className="controller-rank">
+							FINAL RANK <strong>#{resultStanding.rank}</strong>
+						</div>
+						<div className="controller-result-stats">
+							<span>
+								<strong>{resultStanding.playerHits}</strong>{" "}
+								{resultStanding.playerHits === 1 ? "HIT" : "HITS"}
+							</span>
+							<span>
+								<strong>
+									{Math.round(successfulThrowRate(resultStanding) * 100)}%
+								</strong>{" "}
+								CONNECTED
+							</span>
+							<span>
+								<strong>{resultStanding.propsDestroyed}</strong> SMASHED
+							</span>
+						</div>
+						{personalAward ? (
+							<div className="controller-award">
+								<span>ROUND AWARD</span>
+								<strong>{personalAward.label}</strong>
+								<small>{personalAward.detail}</small>
+							</div>
+						) : (
+							<p className="controller-rematch-prompt">
+								Aim for a round award in the rematch.
+							</p>
+						)}
+					</section>
 				) : null}
 			</div>
 		</main>
@@ -959,7 +1060,9 @@ function isUuid(value: string) {
 function projectileName(type: ProjectileType) {
 	if (type === "paper-ball") return "PAPER BALL";
 	if (type === "coffee-mug") return "COFFEE MUG";
-	return "STAPLER";
+	if (type === "stapler") return "STAPLER";
+	if (type === "bomb") return "DESK BOMB";
+	return "SUPERBALL";
 }
 
 function screenWakeLockCopy(status: ScreenWakeLockStatus) {

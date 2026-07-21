@@ -18,19 +18,30 @@ export type LobbyPlayer = PlayerAssignment & {
 
 export type MatchPhase = "lobby" | "countdown" | "playing" | "results";
 
-export type ProjectileType = "paper-ball" | "coffee-mug" | "stapler";
+export type ProjectileType =
+	| "paper-ball"
+	| "coffee-mug"
+	| "stapler"
+	| "bomb"
+	| "superball";
 
 export type PropType =
 	| "monitor"
 	| "printer"
 	| "plant"
 	| "water-cooler"
-	| "document-stack";
+	| "document-stack"
+	| "office-chair"
+	| "recycling-bin";
 
 export type PlayerRoundStats = {
 	score: number;
 	throws: number;
 	playerHits: number;
+	successfulThrows: number;
+	bankShots: number;
+	leaderHits: number;
+	propHits: number;
 	propsDestroyed: number;
 };
 

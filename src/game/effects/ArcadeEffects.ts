@@ -9,12 +9,17 @@ type EffectKind =
 	| "ceramic"
 	| "spark"
 	| "water"
-	| "leaf";
+	| "leaf"
+	| "smoke"
+	| "flare";
+
+type Transient =
+	| Phaser.GameObjects.Image
+	| Phaser.GameObjects.Text
+	| Phaser.GameObjects.Arc;
 
 export class ArcadeEffects {
-	private readonly transients = new Set<
-		Phaser.GameObjects.Image | Phaser.GameObjects.Text
-	>();
+	private readonly transients = new Set<Transient>();
 	private readonly lastTrailAt = new WeakMap<object, number>();
 	private hitStopActive = false;
 
@@ -37,13 +42,57 @@ export class ArcadeEffects {
 				? "paper"
 				: type === "coffee-mug"
 					? "coffee"
-					: "spark";
+					: type === "bomb"
+						? "spark"
+						: type === "superball"
+							? "dot"
+							: "spark";
 		this.piece(kind, projectile.x, projectile.y, {
-			alpha: 0.7,
-			duration: 240,
-			scale: type === "stapler" ? 0.7 : 0.45,
+			alpha: type === "bomb" ? 0.95 : 0.7,
+			duration: type === "superball" ? 320 : 240,
+			scale: type === "stapler" ? 0.7 : type === "bomb" ? 0.58 : 0.45,
+			tint: type === "superball" ? 0x4cc9f0 : undefined,
 			vx: Phaser.Math.Between(-18, 18),
 			vy: Phaser.Math.Between(12, 35),
+		});
+	}
+
+	explosion(x: number, y: number) {
+		this.burst("flare", x, y, 15, 0xff8a3d, 260);
+		this.burst("spark", x, y, 12, ARCADE_COLORS.gold, 310);
+		this.burst("paper", x, y, 10, ARCADE_COLORS.white, 220);
+		this.burst("smoke", x, y, 9, 0x526178, 145);
+		const shockwave = this.scene.add
+			.circle(x, y, 24, 0xffca3a, 0.16)
+			.setStrokeStyle(7, 0xfff0a8, 0.9)
+			.setDepth(23);
+		this.track(shockwave);
+		this.scene.tweens.add({
+			targets: shockwave,
+			scale: this.reducedMotion ? 2.3 : 5.5,
+			alpha: 0,
+			duration: this.reducedMotion ? 160 : 460,
+			ease: "Quint.Out",
+			onComplete: () => this.remove(shockwave),
+		});
+		this.shake(260, 0.022);
+		this.hitStop(62);
+	}
+
+	ricochet(x: number, y: number) {
+		this.burst("spark", x, y, 7, 0x4cc9f0, 180);
+		const pulse = this.scene.add
+			.circle(x, y, 10, 0x4cc9f0, 0.18)
+			.setStrokeStyle(3, 0xdff6ff, 0.86)
+			.setDepth(22);
+		this.track(pulse);
+		this.scene.tweens.add({
+			targets: pulse,
+			scale: 2.4,
+			alpha: 0,
+			duration: this.reducedMotion ? 120 : 260,
+			ease: "Quint.Out",
+			onComplete: () => this.remove(pulse),
 		});
 	}
 
@@ -73,11 +122,15 @@ export class ArcadeEffects {
 		const kind: EffectKind =
 			type === "monitor"
 				? "spark"
-				: type === "printer" || type === "document-stack"
+				: type === "printer" ||
+						type === "document-stack" ||
+						type === "recycling-bin"
 					? "paper"
 					: type === "plant"
 						? "leaf"
-						: "water";
+						: type === "water-cooler"
+							? "water"
+							: "dot";
 		const tint =
 			type === "monitor"
 				? ARCADE_COLORS.gold
@@ -85,21 +138,27 @@ export class ArcadeEffects {
 					? ARCADE_COLORS.green
 					: type === "water-cooler"
 						? 0x4cc9f0
-						: ARCADE_COLORS.white;
+						: type === "office-chair"
+							? 0x4cc9f0
+							: ARCADE_COLORS.white;
 		this.burst(kind, x, y, EFFECT_LIMITS.debrisPerImpact, tint, 220);
 		if (type === "printer")
 			this.burst("paper", x, y - 18, 10, ARCADE_COLORS.white, 170);
+		if (type === "recycling-bin")
+			this.burst("paper", x, y - 24, 14, ARCADE_COLORS.white, 240);
 		this.shake(180, 0.014);
 		this.hitStop(52);
 	}
 
-	score(x: number, y: number, score: number, color: number) {
+	score(x: number, y: number, score: number, color: number, label?: string) {
 		const popup = this.scene.add
-			.text(x, y, `+${score}`, {
+			.text(x, y, label ? `${label}\n+${score}` : `+${score}`, {
 				color: `#${color.toString(16).padStart(6, "0")}`,
 				fontFamily: "Arial Black, system-ui, sans-serif",
-				fontSize: "30px",
+				fontSize: label ? "20px" : "30px",
 				fontStyle: "bold",
+				align: "center",
+				lineSpacing: -3,
 				stroke: "#172033",
 				strokeThickness: 7,
 			})
@@ -220,14 +279,12 @@ export class ArcadeEffects {
 		});
 	}
 
-	private track<T extends Phaser.GameObjects.Image | Phaser.GameObjects.Text>(
-		value: T,
-	) {
+	private track<T extends Transient>(value: T) {
 		this.transients.add(value);
 		return value;
 	}
 
-	private remove(value: Phaser.GameObjects.Image | Phaser.GameObjects.Text) {
+	private remove(value: Transient) {
 		this.transients.delete(value);
 		value.destroy();
 	}

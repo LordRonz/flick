@@ -1,5 +1,5 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Volume2, VolumeX } from "lucide-react";
+import { Crown, Play, Volume2, VolumeX } from "lucide-react";
 import QRCode from "qrcode";
 import type { Dispatch, KeyboardEvent, SetStateAction } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -14,6 +14,8 @@ import {
 } from "../game/audio/ArcadeAudio";
 import { GameBridge } from "../game/bridge/GameBridge";
 import type { GameToReactEvent } from "../game/bridge/game-events";
+import { buildRoundAwards, successfulThrowRate } from "../game/systems/results";
+import { isLeaderBountyActive, uniqueLeaderId } from "../game/systems/scoring";
 import type {
 	LobbyPlayer,
 	MatchPhase,
@@ -257,6 +259,40 @@ function HostPage() {
 		});
 	}, []);
 
+	const connectedPlayers = players.filter((player) => player.connected);
+	const connectedPlayerKey = connectedPlayers
+		.map((player) => player.playerId)
+		.sort()
+		.join(",");
+	const leaderId = uniqueLeaderId(
+		connectedPlayers.map((player) => ({
+			playerId: player.playerId,
+			score: scores[player.playerId] ?? 0,
+		})),
+	);
+	const leaderPlayerNumber =
+		connectedPlayers.find((player) => player.playerId === leaderId)
+			?.playerNumber ?? null;
+	const leaderBountyLive =
+		phase === "playing" && isLeaderBountyActive(timeRemainingMs);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: Connected-player membership intentionally retriggers the broadcast so controllers joining mid-round receive the current target.
+	useEffect(() => {
+		if (socketState !== "Connected") return;
+		sendSocketMessage(socketRef.current, {
+			type: "leader-state",
+			leaderPlayerId: leaderId,
+			leaderPlayerNumber,
+			bountyActive: leaderBountyLive,
+		});
+	}, [
+		connectedPlayerKey,
+		leaderBountyLive,
+		leaderId,
+		leaderPlayerNumber,
+		socketState,
+	]);
+
 	function upsertPlayer(player: LobbyPlayer | PlayerAssignment) {
 		setPlayers((current) => {
 			const existing = current.find(
@@ -345,7 +381,6 @@ function HostPage() {
 	}
 
 	if (!room) return <EmptyRoom />;
-	const connectedPlayers = players.filter((player) => player.connected);
 	const connectedCount = connectedPlayers.length;
 	const readyCount = connectedPlayers.filter((player) => player.ready).length;
 	const allPlayersReady = connectedCount > 0 && readyCount === connectedCount;
@@ -356,23 +391,30 @@ function HostPage() {
 			? connectedCount < 2 || allPlayersReady
 			: connectedCount >= 2 && allPlayersReady);
 	const startLabel =
-		isDevelopment && connectedCount < 2
-			? "Start Demo Round"
-			: connectedCount < 2
-				? "Need 2 Players"
-				: !allPlayersReady
-					? `Waiting for ${connectedCount - readyCount}`
-					: "Start Round";
+		connectedCount < 2 && !isDevelopment
+			? "Need 2 Players"
+			: !canStart
+				? `Waiting for ${connectedCount - readyCount}`
+				: "Start Round";
 	const readinessCopy =
-		connectedCount === 0
-			? "Waiting for players. Scan the QR code to join."
-			: connectedCount < 2
-				? "One more player is needed for a full match."
+		isDevelopment && connectedCount < 2
+			? "Start now or wait for more players to join."
+			: connectedCount === 0
+				? "Waiting for players. Scan the QR code to join."
+				: connectedCount < 2
+					? "One more player is needed for a full match."
+					: allPlayersReady
+						? "Everyone’s ready. Start when the room is watching."
+						: `${readyCount} of ${connectedCount} players ready.`;
+	const readinessHeading =
+		isDevelopment && connectedCount < 2
+			? "Start when ready"
+			: connectedCount === 0
+				? "Waiting for players"
 				: allPlayersReady
-					? "Everyone’s ready. Start when the room is watching."
-					: `${readyCount} of ${connectedCount} players ready.`;
+					? "Room ready"
+					: `${readyCount} of ${connectedCount} ready`;
 	const finalMoments = phase === "playing" && seconds <= 10;
-
 	return (
 		<main className={`host-shell ${finalMoments ? "is-final-moments" : ""}`}>
 			<header className="app-header">
@@ -402,6 +444,31 @@ function HostPage() {
 					)}
 				</button>
 			</header>
+			{phase === "lobby" ? (
+				<section
+					className="host-command-bar"
+					aria-labelledby="round-control-title"
+				>
+					<div className="host-command-status">
+						<div className="host-command-copy" aria-live="polite">
+							<strong id="round-control-title">{readinessHeading}</strong>
+							<p id="round-control-guidance">{readinessCopy}</p>
+						</div>
+					</div>
+					<button
+						className="simulate-button host-start-button"
+						type="button"
+						onClick={startMatch}
+						onMouseEnter={() => playUiCue("ui-hover")}
+						onFocus={() => playUiCue("ui-hover")}
+						disabled={!canStart}
+						aria-describedby="round-control-guidance"
+					>
+						<Play aria-hidden="true" />
+						<span>{startLabel}</span>
+					</button>
+				</section>
+			) : null}
 			<section className="host-layout">
 				<div className="game-panel">
 					<div className="game-panel-header">
@@ -439,6 +506,8 @@ function HostPage() {
 									key={player.playerId}
 									player={player}
 									score={scores[player.playerId] ?? 0}
+									isLeader={player.playerId === leaderId}
+									bountyLive={leaderBountyLive}
 								/>
 							))}
 						{connectedCount === 0 ? (
@@ -489,6 +558,12 @@ function HostPage() {
 							active={spectatorCount > 0}
 						/>
 					</div>
+					<div className="lobby-summary">
+						<strong>Players</strong>
+						<span>
+							{connectedCount} joined · {readyCount} ready
+						</span>
+					</div>
 					<div className="lobby-players">
 						{players.map((player) => (
 							<LobbyRow
@@ -504,18 +579,6 @@ function HostPage() {
 						) : null}
 					</div>
 					<div className="host-actions">
-						{phase === "lobby" ? (
-							<button
-								className="simulate-button"
-								type="button"
-								onClick={startMatch}
-								onMouseEnter={() => playUiCue("ui-hover")}
-								onFocus={() => playUiCue("ui-hover")}
-								disabled={!canStart}
-							>
-								{startLabel}
-							</button>
-						) : null}
 						{isDevelopment ? (
 							<button
 								className="secondary-host-button"
@@ -606,7 +669,6 @@ function HostPage() {
 							</label>
 						))}
 					</details>
-					<p className="rail-hint">{readinessCopy}</p>
 				</aside>
 			</section>
 		</main>
@@ -678,11 +740,21 @@ function handleGameEvent(
 			attackerPlayerId: event.attackerPlayerId,
 			targetPlayerId: event.targetPlayerId,
 			score: event.score,
+			bankShot: event.bankShot,
+			leaderBounty: event.leaderBounty,
 		});
 		sendSocketMessage(socketRef.current, {
 			type: "player-hit",
 			attackerPlayerId: event.attackerPlayerId,
 			targetPlayerId: event.targetPlayerId,
+		});
+	} else if (event.type === "prop-hit" && isUuid(event.playerId)) {
+		sendSocketMessage(socketRef.current, {
+			type: "prop-hit-confirmed",
+			playerId: event.playerId,
+			propType: event.propType,
+			score: event.score,
+			destroyed: event.destroyed,
 		});
 	} else if (event.type === "prop-destroyed" && isUuid(event.playerId)) {
 		sendSocketMessage(socketRef.current, {
@@ -723,11 +795,29 @@ function copyTextFallback(value: string) {
 	}
 }
 
-function ScoreCard({ player, score }: { player: LobbyPlayer; score: number }) {
+function ScoreCard({
+	player,
+	score,
+	isLeader,
+	bountyLive,
+}: {
+	player: LobbyPlayer;
+	score: number;
+	isLeader: boolean;
+	bountyLive: boolean;
+}) {
 	return (
-		<div className={`score-card color-${player.color}`}>
-			<span>P{player.playerNumber}</span>
+		<div
+			className={`score-card color-${player.color} ${isLeader ? "is-leader" : ""}`}
+		>
+			<span className="score-card-player">P{player.playerNumber}</span>
 			<strong>{score.toString().padStart(3, "0")}</strong>
+			{isLeader ? (
+				<span className="leader-badge">
+					<Crown aria-hidden="true" />
+					{bountyLive ? "TARGET +25" : "LEADER"}
+				</span>
+			) : null}
 		</div>
 	);
 }
@@ -792,6 +882,14 @@ function ResultsOverlay({
 
 	if (standings.length === 0) return null;
 	const winner = standings[0];
+	const winners = standings.filter((standing) => standing.rank === 1);
+	const sharedWin = winners.length > 1;
+	const winnerLabel = winners
+		.map((standing) => `P${standing.playerNumber}`)
+		.join(" + ");
+	const awards = buildRoundAwards(standings);
+	const nextPlace = standings.find((standing) => standing.rank > 1);
+	const scoreGap = Math.max(0, (winner?.score ?? 0) - (nextPlace?.score ?? 0));
 	return (
 		<div
 			ref={dialogRef}
@@ -806,7 +904,7 @@ function ResultsOverlay({
 					className={`winner-mascot color-${winner?.color ?? "blue"}`}
 					aria-hidden="true"
 				>
-					<span>P{winner?.playerNumber}</span>
+					<span>{sharedWin ? "TIE" : `P${winner?.playerNumber}`}</span>
 				</div>
 				<div className="results-confetti" aria-hidden="true">
 					{CONFETTI_PIECES.map((piece) => (
@@ -814,8 +912,22 @@ function ResultsOverlay({
 					))}
 				</div>
 				<span className="results-kicker">OFFICE MAYHEM COMPLETE</span>
-				<h2 id="results-title">P{winner?.playerNumber} wins the office</h2>
+				<h2 id="results-title">
+					{sharedWin
+						? `${winnerLabel} share the office`
+						: `${winnerLabel} wins the office`}
+				</h2>
 				<p className="results-score">{winner?.score ?? 0} points</p>
+				{sharedWin ? (
+					<p className="results-rematch-copy">
+						Shared top score — run it back to settle the office.
+					</p>
+				) : nextPlace ? (
+					<p className="results-rematch-copy">
+						Only {scoreGap} points separated {winnerLabel} and P
+						{nextPlace.playerNumber}.
+					</p>
+				) : null}
 				<ol className="results-list" aria-label="Final ranking">
 					{standings.map((standing) => (
 						<li
@@ -827,12 +939,28 @@ function ResultsOverlay({
 							</strong>
 							<span>{standing.score} pts</span>
 							<small>
-								{standing.playerHits} hits · {standing.propsDestroyed} props ·{" "}
-								{standing.throws} throws
+								{standing.playerHits}{" "}
+								{standing.playerHits === 1 ? "hit" : "hits"} ·{" "}
+								{standing.propsDestroyed} smashed ·{" "}
+								{Math.round(successfulThrowRate(standing) * 100)}% connected
 							</small>
 						</li>
 					))}
 				</ol>
+				{awards.length ? (
+					<section className="results-highlights" aria-label="Round highlights">
+						{awards.map((award) => (
+							<div
+								key={`${award.label}-${award.playerId}`}
+								className={`result-award color-${award.color}`}
+							>
+								<span>P{award.playerNumber}</span>
+								<strong>{award.label}</strong>
+								<small>{award.detail}</small>
+							</div>
+						))}
+					</section>
+				) : null}
 				<div className="results-actions">
 					<button
 						ref={primaryActionRef}

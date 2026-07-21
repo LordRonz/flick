@@ -21,13 +21,21 @@ const playerNumberSchema = z.union([
 ]);
 const playerColorSchema = z.enum(PLAYER_COLORS);
 const matchPhaseSchema = z.enum(["lobby", "countdown", "playing", "results"]);
-const projectileTypeSchema = z.enum(["paper-ball", "coffee-mug", "stapler"]);
+const projectileTypeSchema = z.enum([
+	"paper-ball",
+	"coffee-mug",
+	"stapler",
+	"bomb",
+	"superball",
+]);
 const propTypeSchema = z.enum([
 	"monitor",
 	"printer",
 	"plant",
 	"water-cooler",
 	"document-stack",
+	"office-chair",
+	"recycling-bin",
 ]);
 
 const playerAssignmentSchema = z.object({
@@ -46,6 +54,10 @@ const playerRoundStatsSchema = z.object({
 	score: z.number().int().nonnegative(),
 	throws: z.number().int().nonnegative(),
 	playerHits: z.number().int().nonnegative(),
+	successfulThrows: z.number().int().nonnegative(),
+	bankShots: z.number().int().nonnegative(),
+	leaderHits: z.number().int().nonnegative(),
+	propHits: z.number().int().nonnegative(),
 	propsDestroyed: z.number().int().nonnegative(),
 });
 
@@ -148,6 +160,8 @@ export const SpectatorPresentationEventSchema = z.discriminatedUnion("type", [
 			targetPlayerId: z.string().uuid(),
 			projectileType: projectileTypeSchema,
 			score: z.number().int().nonnegative(),
+			bankShot: z.boolean(),
+			leaderBounty: z.boolean(),
 			impactX: finiteNumber,
 			impactY: finiteNumber,
 			impactStrength: finiteNumber.min(0),
@@ -159,6 +173,9 @@ export const SpectatorPresentationEventSchema = z.discriminatedUnion("type", [
 			eventId: z.string().uuid(),
 			propId: z.string().min(1).max(64),
 			propType: propTypeSchema,
+			playerId: z.string().uuid(),
+			score: z.number().int().nonnegative(),
+			destroyed: z.boolean(),
 			impactX: finiteNumber,
 			impactY: finiteNumber,
 		})
@@ -171,6 +188,15 @@ export const SpectatorPresentationEventSchema = z.discriminatedUnion("type", [
 			propId: z.string().min(1).max(64),
 			propType: propTypeSchema,
 			score: z.number().int().nonnegative(),
+			impactX: finiteNumber,
+			impactY: finiteNumber,
+		})
+		.strict(),
+	z
+		.object({
+			type: z.literal("bomb-exploded"),
+			eventId: z.string().uuid(),
+			playerId: z.string().uuid(),
 			impactX: finiteNumber,
 			impactY: finiteNumber,
 		})
@@ -212,6 +238,30 @@ const flickAcceptedSchema = z
 	})
 	.strict();
 
+const hitConfirmedSchema = z.object({
+	type: z.literal("hit-confirmed"),
+	attackerPlayerId: z.string().uuid(),
+	targetPlayerId: z.string().uuid(),
+	score: z.number().int().nonnegative(),
+	bankShot: z.boolean(),
+	leaderBounty: z.boolean(),
+});
+
+const propHitConfirmedSchema = z.object({
+	type: z.literal("prop-hit-confirmed"),
+	playerId: z.string().uuid(),
+	propType: propTypeSchema,
+	score: z.number().int().nonnegative(),
+	destroyed: z.boolean(),
+});
+
+const leaderStateSchema = z.object({
+	type: z.literal("leader-state"),
+	leaderPlayerId: z.string().uuid().nullable(),
+	leaderPlayerNumber: playerNumberSchema.nullable(),
+	bountyActive: z.boolean(),
+});
+
 const controllerInputSchema = z.discriminatedUnion("type", [
 	z
 		.object({
@@ -245,13 +295,10 @@ export const HostToRoomMessageSchema = z.discriminatedUnion("type", [
 		phase: matchPhaseSchema,
 		timeRemainingMs: finiteNumber.min(0).optional(),
 	}),
+	leaderStateSchema,
 	flickAcceptedSchema,
-	z.object({
-		type: z.literal("hit-confirmed"),
-		attackerPlayerId: z.string().uuid(),
-		targetPlayerId: z.string().uuid(),
-		score: z.number().int().nonnegative(),
-	}),
+	hitConfirmedSchema,
+	propHitConfirmedSchema,
 	z.object({
 		type: z.literal("player-hit"),
 		targetPlayerId: z.string().uuid(),
@@ -363,18 +410,15 @@ export const HostMessageSchema = z.discriminatedUnion("type", [
 		phase: matchPhaseSchema,
 		timeRemainingMs: finiteNumber.min(0).optional(),
 	}),
+	leaderStateSchema,
 	flickAcceptedSchema,
 	z.object({
 		type: z.literal("score-update"),
 		playerId: z.string().uuid(),
 		score: z.number().int().nonnegative(),
 	}),
-	z.object({
-		type: z.literal("hit-confirmed"),
-		attackerPlayerId: z.string().uuid(),
-		targetPlayerId: z.string().uuid(),
-		score: z.number().int().nonnegative(),
-	}),
+	hitConfirmedSchema,
+	propHitConfirmedSchema,
 	z.object({
 		type: z.literal("player-hit"),
 		targetPlayerId: z.string().uuid(),

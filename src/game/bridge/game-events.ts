@@ -50,6 +50,15 @@ export type GameToReactEvent =
 			attackerPlayerId: string;
 			targetPlayerId: string;
 			score: number;
+			bankShot: boolean;
+			leaderBounty: boolean;
+	  }
+	| {
+			type: "prop-hit";
+			playerId: string;
+			propType: PropType;
+			score: number;
+			destroyed: boolean;
 	  }
 	| {
 			type: "prop-destroyed";
