@@ -1,4 +1,5 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { Github } from "lucide-react";
 import { useState } from "react";
 import { BrandMark } from "../components/BrandMark";
 import { playUiCue } from "../game/audio/ArcadeAudio";
@@ -65,14 +66,20 @@ function Home() {
 					</p>
 				) : null}
 				<p className="microcopy">No account. One laptop. Two to four phones.</p>
+				<a
+					className="github-link"
+					href="https://github.com/lordronz/flick"
+					target="_blank"
+					rel="noreferrer"
+					aria-label="View Flick Arena on GitHub"
+				>
+					<Github aria-hidden="true" />
+					<span>View on GitHub</span>
+				</a>
 			</section>
 			<section className="landing-preview" aria-label="Flick game preview">
 				<div className="preview-topline">
 					<span>OFFICE MAYHEM</span>
-					<span className="status-live">
-						<i />
-						READY
-					</span>
 				</div>
 				<div className="preview-canvas">
 					<div className="preview-windows">

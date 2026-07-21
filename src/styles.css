@@ -56,7 +56,7 @@ a { color: inherit; text-decoration: none; }
 
 .landing-shell { position: relative; display: grid; grid-template-columns: minmax(300px, .8fr) minmax(440px, 1.2fr); align-items: center; gap: clamp(48px, 8vw, 140px); width: min(1280px, calc(100% - 64px)); min-height: 100vh; margin: 0 auto; padding: 72px 0; overflow: hidden; }
 .landing-copy { position: relative; z-index: 1; }
-.landing-copy .brand-mark { margin-bottom: 92px; }
+.landing-copy .brand-mark { margin-bottom: 32px; }
 .landing-copy .brand-logo { width: 54px; height: 54px; }
 .landing-copy .brand-wordmark { gap: 6px; font-size: 20px; }
 .landing-copy h1 { max-width: 520px; margin: 18px 0 24px; font-size: clamp(54px, 7vw, 92px); line-height: .92; letter-spacing: -.04em; font-weight: 600; }
@@ -67,6 +67,10 @@ a { color: inherit; text-decoration: none; }
 .primary-button:hover, .simulate-button:hover { background: #a0f5c9; transform: translateY(-2px); }
 .primary-button span { font-size: 22px; }
 .microcopy { margin-top: 20px; color: #5b7074; font-family: var(--mono); font-size: 11px; }
+.github-link { display: inline-flex; align-items: center; gap: 9px; min-height: 44px; margin-top: 18px; padding: 0 14px; color: var(--ink); border: 1px solid rgba(23,32,51,.46); background: rgba(255,255,255,.16); box-shadow: 3px 3px 0 var(--ink); font-family: var(--mono); font-size: 11px; font-weight: 700; letter-spacing: .05em; transition: background 150ms ease, transform 150ms ease, box-shadow 150ms ease; }
+.github-link svg { width: 18px; height: 18px; }
+.github-link:hover { background: rgba(255,255,255,.5); transform: translate(1px, 1px); box-shadow: 2px 2px 0 var(--ink); }
+.github-link:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--ink); }
 .landing-preview { position: relative; z-index: 1; padding: 18px; border: 1px solid var(--line); background: rgba(17,24,29,.58); box-shadow: 0 24px 90px rgba(0,0,0,.34); }
 .preview-topline, .preview-stats { display: flex; justify-content: space-between; color: var(--muted); font-family: var(--mono); font-size: 10px; letter-spacing: .12em; }
 .status-live { color: var(--mint); }.status-live i { display: inline-block; width: 6px; height: 6px; margin-right: 7px; border-radius: 50%; background: var(--mint); }

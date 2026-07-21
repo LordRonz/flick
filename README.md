@@ -4,6 +4,9 @@ Flick Arena is a local multiplayer office battle. One laptop renders the Phaser 
 
 The host owns the match, physics, scoring, and results. The Durable Object only owns room membership, player slots, reconnection grace, and validated message relay.
 
+> [!IMPORTANT]
+> **Testing with real phones requires an HTTPS URL that the phones can reach.** Deploying the app is the recommended path. The local `http://localhost:3000` workflow below is intended for testing with additional desktop tabs; a phone cannot use the laptop's `localhost`, and physical flick sensors are not reliably available over plain HTTP. An HTTPS development tunnel is also supported if you do not want to deploy yet.
+
 ## Local desktop test
 
 ```bash
@@ -28,7 +31,7 @@ Development builds also allow a one-player demo round.
 
 ## Test with iPhone or Android controllers
 
-Motion sensors require a secure context. Deploy the worker, or expose the app through an HTTPS development tunnel that is reachable from the phone.
+Use the deployed HTTPS app for real-phone testing. Motion sensors require a secure context, and the URL must be reachable from both the laptop and each phone. Alternatively, expose the local app through an HTTPS development tunnel.
 
 ```bash
 pnpm cf-typegen
