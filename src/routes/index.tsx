@@ -1,14 +1,17 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { Github } from "lucide-react";
-import { useState } from "react";
+import { type FormEvent, useState } from "react";
 import { BrandMark } from "../components/BrandMark";
 import { playUiCue } from "../game/audio/ArcadeAudio";
+import { roomCodeSchema } from "../realtime/protocol";
 
 export const Route = createFileRoute("/")({ component: Home });
 
 function Home() {
 	const navigate = useNavigate();
 	const [isCreating, setIsCreating] = useState(false);
+	const [isJoining, setIsJoining] = useState(false);
+	const [roomCode, setRoomCode] = useState("");
 	const [error, setError] = useState("");
 
 	async function createGame() {
@@ -30,6 +33,31 @@ function Home() {
 			);
 		} finally {
 			setIsCreating(false);
+		}
+	}
+
+	async function joinGame(event: FormEvent<HTMLFormElement>) {
+		event.preventDefault();
+		const normalizedRoomCode = roomCode.trim().toUpperCase();
+		setRoomCode(normalizedRoomCode);
+		setError("");
+
+		if (!roomCodeSchema.safeParse(normalizedRoomCode).success) {
+			playUiCue("ui-error");
+			setError("Enter a valid 6-character room code.");
+			return;
+		}
+
+		setIsJoining(true);
+		try {
+			await navigate({
+				to: "/controller",
+				search: { room: normalizedRoomCode },
+			});
+		} catch (cause) {
+			playUiCue("ui-error");
+			setError(cause instanceof Error ? cause.message : "Could not join room.");
+			setIsJoining(false);
 		}
 	}
 
@@ -61,10 +89,37 @@ function Home() {
 					<span aria-hidden="true">↗</span>
 				</button>
 				{error ? (
-					<p className="error-text" role="alert">
+					<p className="error-text" id="room-code-error" role="alert">
 						{error}
 					</p>
 				) : null}
+				<form className="join-form" onSubmit={joinGame}>
+					<label htmlFor="room-code">Have a room code?</label>
+					<div className="join-form-row">
+						<input
+							id="room-code"
+							name="roomCode"
+							type="text"
+							value={roomCode}
+							onChange={(event) => setRoomCode(event.target.value)}
+							placeholder="ABC123"
+							maxLength={6}
+							autoCapitalize="characters"
+							autoComplete="off"
+							spellCheck={false}
+							aria-describedby={error ? "room-code-error" : undefined}
+						/>
+						<button
+							className="join-button"
+							type="submit"
+							onMouseEnter={() => playUiCue("ui-hover")}
+							onFocus={() => playUiCue("ui-hover")}
+							disabled={isJoining}
+						>
+							{isJoining ? "Joining…" : "Join"}
+						</button>
+					</div>
+				</form>
 				<p className="microcopy">No account. One laptop. Two to four phones.</p>
 				<a
 					className="github-link"
