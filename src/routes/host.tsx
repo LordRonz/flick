@@ -1,5 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { Crown, Play, Volume2, VolumeX } from "lucide-react";
+import {
+	Crown,
+	Maximize2,
+	Minimize2,
+	Play,
+	Volume2,
+	VolumeX,
+} from "lucide-react";
 import QRCode from "qrcode";
 import type { Dispatch, KeyboardEvent, SetStateAction } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -60,6 +67,7 @@ function HostPage() {
 	const { room } = Route.useSearch();
 	const bridgeRef = useRef(new GameBridge());
 	const socketRef = useRef<WebSocket | null>(null);
+	const gamePanelRef = useRef<HTMLDivElement>(null);
 	const phaseRef = useRef<MatchPhase>("lobby");
 	const [socketState, setSocketState] = useState("Connecting");
 	const [players, setPlayers] = useState<LobbyPlayer[]>([]);
@@ -74,6 +82,7 @@ function HostPage() {
 	const [spectatorQrOpen, setSpectatorQrOpen] = useState(false);
 	const [spectatorFeedback, setSpectatorFeedback] = useState("");
 	const [muted, setMuted] = useState(false);
+	const [isFullscreen, setIsFullscreen] = useState(false);
 	const [reconnectAttempt, setReconnectAttempt] = useState(0);
 	const [audioLevels, setAudioLevels] = useState<AudioLevels>({
 		...DEFAULT_AUDIO_LEVELS,
@@ -259,6 +268,14 @@ function HostPage() {
 		});
 	}, []);
 
+	useEffect(() => {
+		const handleFullscreenChange = () =>
+			setIsFullscreen(document.fullscreenElement === gamePanelRef.current);
+		document.addEventListener("fullscreenchange", handleFullscreenChange);
+		return () =>
+			document.removeEventListener("fullscreenchange", handleFullscreenChange);
+	}, []);
+
 	const connectedPlayers = players.filter((player) => player.connected);
 	const connectedPlayerKey = connectedPlayers
 		.map((player) => player.playerId)
@@ -345,6 +362,18 @@ function HostPage() {
 		bridgeRef.current.send({ type: "set-muted", muted: next });
 	}
 
+	async function toggleFullscreen() {
+		try {
+			if (document.fullscreenElement === gamePanelRef.current) {
+				await document.exitFullscreen();
+			} else {
+				await gamePanelRef.current?.requestFullscreen();
+			}
+		} catch {
+			playUiCue("ui-error");
+		}
+	}
+
 	function updateAudioLevel(key: keyof AudioLevels, value: number) {
 		const next = { ...audioLevels, [key]: value };
 		setAudioLevels(next);
@@ -416,7 +445,9 @@ function HostPage() {
 					: `${readyCount} of ${connectedCount} ready`;
 	const finalMoments = phase === "playing" && seconds <= 10;
 	return (
-		<main className={`host-shell ${finalMoments ? "is-final-moments" : ""}`}>
+		<main
+			className={`host-shell phase-${phase} ${finalMoments ? "is-final-moments" : ""}`}
+		>
 			<header className="app-header">
 				<Link to="/" className="brand-mark">
 					<BrandMark />
@@ -427,69 +458,112 @@ function HostPage() {
 				<div className="header-help">
 					{phase.toUpperCase()} <span>·</span> OFFICE MAYHEM
 				</div>
-				<button
-					className="sound-toggle"
-					type="button"
-					onClick={toggleMuted}
-					onMouseEnter={() => playUiCue("ui-hover")}
-					onFocus={() => playUiCue("ui-hover")}
-					aria-pressed={muted}
-					aria-label={muted ? "Turn sound on" : "Mute sound"}
-					title={muted ? "Turn sound on" : "Mute sound"}
-				>
-					{muted ? (
-						<VolumeX aria-hidden="true" />
-					) : (
-						<Volume2 aria-hidden="true" />
-					)}
-				</button>
 			</header>
-			{phase === "lobby" ? (
-				<section
-					className="host-command-bar"
-					aria-labelledby="round-control-title"
-				>
-					<div className="host-command-status">
-						<div className="host-command-copy" aria-live="polite">
-							<strong id="round-control-title">{readinessHeading}</strong>
-							<p id="round-control-guidance">{readinessCopy}</p>
-						</div>
-					</div>
-					<button
-						className="simulate-button host-start-button"
-						type="button"
-						onClick={startMatch}
-						onMouseEnter={() => playUiCue("ui-hover")}
-						onFocus={() => playUiCue("ui-hover")}
-						disabled={!canStart}
-						aria-describedby="round-control-guidance"
-					>
-						<Play aria-hidden="true" />
-						<span>{startLabel}</span>
-					</button>
-				</section>
-			) : null}
 			<section className="host-layout">
-				<div className="game-panel">
-					<div className="game-panel-header">
-						<div>
-							<span className="panel-label">ROOM</span>
-							<strong>{room}</strong>
-						</div>
-						<div className="match-status">
-							<span className="panel-label">
-								{phase === "playing" ? "TIME" : "MATCH"}
-							</span>
-							<strong>
-								{phase === "playing" ? `${seconds}s` : phase.toUpperCase()}
-							</strong>
-						</div>
-					</div>
+				<div className="game-panel" ref={gamePanelRef}>
 					<div className="canvas-frame">
 						<PhaserGame
 							bridge={bridgeRef.current}
 							allowSinglePlayer={isDevelopment}
 						/>
+						<section className="arena-hud" aria-label="Live match information">
+							<div className="arena-room-chip">
+								<span>ROOM</span>
+								<strong>{room}</strong>
+							</div>
+							<section className="arena-scoreboard" aria-label="Scoreboard">
+								{players
+									.filter((player) => player.connected)
+									.map((player) => (
+										<ScoreCard
+											key={player.playerId}
+											player={player}
+											score={scores[player.playerId] ?? 0}
+											isLeader={player.playerId === leaderId}
+											bountyLive={leaderBountyLive}
+										/>
+									))}
+								{connectedCount === 0 ? (
+									<span className="arena-waiting-copy">
+										Waiting for players
+									</span>
+								) : null}
+							</section>
+							<div className="arena-status-cluster">
+								<div className="match-status">
+									<span>{phase === "playing" ? "TIME" : "MATCH"}</span>
+									<strong>
+										{phase === "playing" ? `${seconds}s` : phase.toUpperCase()}
+									</strong>
+								</div>
+								<div className="arena-view-controls">
+									{isDevelopment && phase === "playing" ? (
+										<button
+											className="arena-text-button"
+											type="button"
+											onClick={simulateFlick}
+											title="Simulate a flick"
+										>
+											✦ FLICK
+										</button>
+									) : null}
+									<button
+										className="arena-icon-button"
+										type="button"
+										onClick={toggleMuted}
+										aria-pressed={muted}
+										aria-label={muted ? "Turn sound on" : "Mute sound"}
+										title={muted ? "Turn sound on" : "Mute sound"}
+									>
+										{muted ? (
+											<VolumeX aria-hidden="true" />
+										) : (
+											<Volume2 aria-hidden="true" />
+										)}
+									</button>
+									<button
+										className="arena-icon-button"
+										type="button"
+										onClick={toggleFullscreen}
+										aria-label={
+											isFullscreen ? "Exit fullscreen" : "Enter fullscreen"
+										}
+										title={
+											isFullscreen ? "Exit fullscreen" : "Enter fullscreen"
+										}
+									>
+										{isFullscreen ? (
+											<Minimize2 aria-hidden="true" />
+										) : (
+											<Maximize2 aria-hidden="true" />
+										)}
+									</button>
+								</div>
+							</div>
+						</section>
+						{phase === "lobby" ? (
+							<section
+								className="arena-lobby-control"
+								aria-labelledby="round-control-title"
+							>
+								<div className="arena-lobby-copy" aria-live="polite">
+									<strong id="round-control-title">{readinessHeading}</strong>
+									<p id="round-control-guidance">{readinessCopy}</p>
+								</div>
+								<button
+									className="simulate-button host-start-button"
+									type="button"
+									onClick={startMatch}
+									onMouseEnter={() => playUiCue("ui-hover")}
+									onFocus={() => playUiCue("ui-hover")}
+									disabled={!canStart}
+									aria-describedby="round-control-guidance"
+								>
+									<Play aria-hidden="true" />
+									<span>{startLabel}</span>
+								</button>
+							</section>
+						) : null}
 						{phase === "results" ? (
 							<ResultsOverlay
 								standings={standings}
@@ -497,28 +571,6 @@ function HostPage() {
 								onBackToLobby={resetMatch}
 							/>
 						) : null}
-					</div>
-					<div className="scoreboard-strip">
-						{players
-							.filter((player) => player.connected)
-							.map((player) => (
-								<ScoreCard
-									key={player.playerId}
-									player={player}
-									score={scores[player.playerId] ?? 0}
-									isLeader={player.playerId === leaderId}
-									bountyLive={leaderBountyLive}
-								/>
-							))}
-						{connectedCount === 0 ? (
-							<span className="empty-lobby-copy">
-								Scan the QR code to take a station.
-							</span>
-						) : null}
-					</div>
-					<div className="game-footer">
-						<span>OBJECTIVE: OUTSCORE THE OFFICE</span>
-						<span>60 SECOND LOCAL BATTLE</span>
 					</div>
 				</div>
 				<aside className="host-rail">
@@ -576,20 +628,6 @@ function HostPage() {
 							<p className="rail-hint">
 								Waiting for players. A game needs two ready phones.
 							</p>
-						) : null}
-					</div>
-					<div className="host-actions">
-						{isDevelopment ? (
-							<button
-								className="secondary-host-button"
-								type="button"
-								onClick={simulateFlick}
-								onMouseEnter={() => playUiCue("ui-hover")}
-								onFocus={() => playUiCue("ui-hover")}
-								disabled={phase !== "playing"}
-							>
-								✦ Simulate Flick
-							</button>
 						) : null}
 					</div>
 					<section

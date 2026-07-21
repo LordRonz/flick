@@ -781,6 +781,46 @@ function ControllerPage() {
 					{confirmation}
 				</div>
 
+				<section
+					className={`physical-flick-card physical-flick-${permission.toLowerCase().replaceAll(" ", "-")}`}
+					aria-labelledby="physical-flick-title"
+				>
+					<div className="physical-flick-copy">
+						<span className="physical-flick-mark" aria-hidden="true">
+							↗
+						</span>
+						<div>
+							<strong id="physical-flick-title">
+								{permission === "Enabled"
+									? "Physical flick is on"
+									: permission === "Denied" || permission === "Unsupported"
+										? "Physical flick unavailable"
+										: "Try physical flick"}
+							</strong>
+							<output id="physical-flick-description" aria-live="polite">
+								{permission === "Enabled"
+									? "Short phone flicks now throw. The button still works."
+									: permission === "Denied" || permission === "Unsupported"
+										? "Keep playing with the on-screen Throw button."
+										: "Use a short forward motion for the signature throw."}
+							</output>
+						</div>
+					</div>
+					<button
+						className="physical-flick-button"
+						type="button"
+						onClick={enableMotion}
+						disabled={permission === "Enabled" || permission === "Unsupported"}
+						aria-describedby="physical-flick-description"
+					>
+						{permission === "Enabled"
+							? "✓ ENABLED"
+							: permission === "Unsupported"
+								? "UNAVAILABLE"
+								: "ENABLE"}
+					</button>
+				</section>
+
 				{phase === "lobby" ? (
 					<section className="controller-ready-panel">
 						<div>
@@ -805,31 +845,14 @@ function ControllerPage() {
 				<details className="controller-setup">
 					<summary>
 						<span>
-							<strong>Controller setup</strong>
-							<small>
-								Motion {permission === "Enabled" ? "on" : "optional"} ·{" "}
-								{sensitivity} sensitivity
-							</small>
+							<strong>Flick tuning</strong>
+							<small>{sensitivity} sensitivity · sensor details</small>
 						</span>
 						<span className="setup-disclosure" aria-hidden="true">
 							+
 						</span>
 					</summary>
 					<div className="controller-setup-body">
-						<button
-							className="action-button action-primary"
-							type="button"
-							onClick={enableMotion}
-						>
-							<span>◉</span>
-							{permission === "Enabled"
-								? "Physical Flick Enabled"
-								: "Enable Physical Flick"}
-						</button>
-						<p className="controller-setup-explainer">
-							Physical flick is optional. The on-screen Throw button always
-							remains available.
-						</p>
 						<fieldset
 							className="sensitivity-control"
 							aria-describedby="flick-sensitivity-help"
@@ -888,16 +911,6 @@ function ControllerPage() {
 									? `${magnitude.toFixed(1)} m/s² · ${motionEventCount} events`
 									: "Enable physical flick, then move the phone"}
 							</span>
-						</output>
-						<output
-							className={`motion-status motion-status-${permission.toLowerCase().replaceAll(" ", "-")}`}
-							aria-live="polite"
-						>
-							{permission === "Enabled"
-								? "Physical flick enabled"
-								: permission === "Denied" || permission === "Unsupported"
-									? "Physical flick unavailable — use the Throw button"
-									: "Optional: physical flick adds the signature throw"}
 						</output>
 						<output
 							className={`screen-wake-status screen-wake-${wakeLockStatus}`}
