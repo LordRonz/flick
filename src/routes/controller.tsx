@@ -1022,8 +1022,83 @@ function ControllerPage() {
 						)}
 					</section>
 				) : null}
+
+				<AndroidMotionGuide />
 			</div>
 		</main>
+	);
+}
+
+function AndroidMotionGuide() {
+	return (
+		<details className="android-motion-guide">
+			<summary>
+				<span className="android-guide-icon" aria-hidden="true">
+					↗
+				</span>
+				<span className="android-guide-heading">
+					<span>ANDROID HELP</span>
+					<strong>Motion not working?</strong>
+					<small>Fix Chrome or Brave settings in about 30 seconds</small>
+				</span>
+				<span className="android-guide-disclosure" aria-hidden="true">
+					+
+				</span>
+			</summary>
+
+			<div className="android-guide-body">
+				<div className="android-browser-note">
+					<span>BEST CHOICE</span>
+					<div>
+						<strong>Open Flick in Chrome</strong>
+						<p>
+							Chrome usually works immediately. Brave blocks motion sensors by
+							default until you switch them on.
+						</p>
+					</div>
+				</div>
+
+				<ol className="android-guide-steps">
+					<li>
+						<span aria-hidden="true">1</span>
+						<div>
+							<strong>Open browser settings</strong>
+							<p>Tap the ⋮ menu, then choose Settings.</p>
+						</div>
+					</li>
+					<li>
+						<span aria-hidden="true">2</span>
+						<div>
+							<strong>Find Motion sensors</strong>
+							<p>Open Site settings, then tap Motion sensors.</p>
+						</div>
+					</li>
+					<li>
+						<span aria-hidden="true">3</span>
+						<div>
+							<strong>Allow and return</strong>
+							<p>Turn access on, return to Flick, then refresh this page.</p>
+						</div>
+					</li>
+				</ol>
+
+				<div className="android-signal-check">
+					<span className="android-signal-pulse" aria-hidden="true" />
+					<div>
+						<strong>Check that it worked</strong>
+						<p>
+							Open Flick tuning above and move your phone. The event count
+							should climb quickly and the signal should move above 0.0 m/s².
+						</p>
+					</div>
+				</div>
+
+				<p className="android-guide-fallback">
+					Still stuck? Keep playing with the Throw button—physical motion is
+					always optional.
+				</p>
+			</div>
+		</details>
 	);
 }
 
